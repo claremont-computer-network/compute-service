@@ -74,6 +74,24 @@ Requires Ansible installed locally and SSH access to the remote machine.
 ./scripts/bootstrap.sh
 ```
 
+Any extra arguments are passed straight through to `ansible-playbook`:
+
+```bash
+# SSH password authentication (will prompt)
+./scripts/bootstrap.sh --ask-pass
+
+# SSH password + sudo password required
+./scripts/bootstrap.sh --ask-pass --ask-become-pass
+
+# Key at a non-standard path
+./scripts/bootstrap.sh --private-key ~/.ssh/my_key
+
+# Non-standard SSH port
+./scripts/bootstrap.sh -e "ansible_port=2222"
+```
+
+You can also set `ansible_port` and `ansible_ssh_private_key_file` permanently in `inventory.yml` to avoid typing them each time. If you are running this on the machine itself rather than from a separate control machine, set `ansible_connection: local` in `inventory.yml` instead — no SSH is involved in that case.
+
 This installs Docker on the remote host, creates the service user, and mounts the configured storage path. It is safe to run again if anything changes.
 
 ### 3. Start the dispatcher

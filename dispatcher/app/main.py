@@ -90,17 +90,31 @@ def execute(req: ExecuteRequest, authorized: bool = Depends(get_api_key)):
         if req.volumes:
             volumes = _validate_volumes(req.volumes)
 
-        # Build NVIDIA device_requests if GPU access is requested
+        # Build NVIDIA device_requests if GPU access is requested.
+        # count and device_ids are mutually exclusive per the Docker Engine API:
+        #   - "all" GPUs → count=-1, no device_ids
+        #   - specific IDs → device_ids only, no count
         device_requests = None
         if req.gpu is not None:
-            device_ids = req.gpu.device_ids if req.gpu.device_ids != "all" else []
-            device_requests = [
-                docker.types.DeviceRequest(
-                    device_ids=device_ids if device_ids else None,
-                    count=-1 if req.gpu.device_ids == "all" else len(device_ids),
-                    capabilities=[req.gpu.capabilities],
-                )
-            ]
+            if req.gpu.device_ids == "all":
+                device_requests = [
+                    docker.types.DeviceRequest(
+                        count=-1,
+                        capabilities=[req.gpu.capabilities],
+                    )
+                ]
+            else:
+                if not req.gpu.device_ids:
+                    raise HTTPException(
+                        status_code=422,
+                        detail="gpu.device_ids must be a non-empty list or 'all'",
+                    )
+                device_requests = [
+                    docker.types.DeviceRequest(
+                        device_ids=req.gpu.device_ids,
+                        capabilities=[req.gpu.capabilities],
+                    )
+                ]
 
         # ensure the image is available (pull if needed)
         try:

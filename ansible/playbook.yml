@@ -98,7 +98,7 @@
     - name: Add NVIDIA container toolkit repository
       apt_repository:
         repo: >-
-          deb https://nvidia.github.io/libnvidia-container/stable/deb/{{ {'x86_64': 'amd64', 'aarch64': 'arm64', 'armv7l': 'armhf'}[ansible_architecture] | default(ansible_architecture) }} /
+          deb https://nvidia.github.io/libnvidia-container/stable/deb/{{ {'x86_64': 'amd64', 'aarch64': 'arm64', 'armv7l': 'armhf'}.get(ansible_architecture, ansible_architecture) }} /
         state: present
         filename: nvidia-container-toolkit
       when:

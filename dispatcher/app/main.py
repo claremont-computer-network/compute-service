@@ -61,6 +61,12 @@ class ExecuteRequest(BaseModel):
     # When set, the job is given access to the specified GPUs via the
     # NVIDIA container runtime.  Requires nvidia-container-toolkit on the host.
     gpu: t.Optional[GpuRequest] = None
+    # Shared-memory size passed to Docker (e.g. "1g", "512m").
+    # NVIDIA recommends increasing this for PyTorch multi-GPU / DataLoader jobs.
+    shm_size: t.Optional[str] = None
+    # IPC namespace — set to "host" to share the host IPC namespace, which
+    # gives PyTorch DataLoader workers unlimited shared memory.
+    ipc_mode: t.Optional[str] = None
 
 
 class CellRequest(BaseModel):
@@ -71,6 +77,9 @@ class CellRequest(BaseModel):
     volumes: t.Optional[t.List[VolumeSpec]] = None
     # Cell execution is always synchronous; detach is not supported.
     gpu: t.Optional[GpuRequest] = None
+    # Shared-memory / IPC settings (see ExecuteRequest for details).
+    shm_size: t.Optional[str] = None
+    ipc_mode: t.Optional[str] = None
 
 
 def get_api_key(x_api_key: t.Optional[str] = Header(None)):
@@ -146,6 +155,10 @@ def execute(req: ExecuteRequest, authorized: bool = Depends(get_api_key)):
             stderr=True,
             device_requests=device_requests,
         )
+        if req.shm_size:
+            run_kwargs["shm_size"] = req.shm_size
+        if req.ipc_mode:
+            run_kwargs["ipc_mode"] = req.ipc_mode
 
         if req.detach:
             container = client.containers.run(
@@ -205,8 +218,7 @@ def execute_cell(req: CellRequest, authorized: bool = Depends(get_api_key)):
         except docker.errors.ImageNotFound:
             client.images.pull(req.image)
 
-        output = client.containers.run(
-            req.image,
+        run_cell_kwargs: dict = dict(
             command=["python", "-c", req.code],
             environment=req.env,
             volumes=volumes,
@@ -216,6 +228,12 @@ def execute_cell(req: CellRequest, authorized: bool = Depends(get_api_key)):
             detach=False,
             remove=True,
         )
+        if req.shm_size:
+            run_cell_kwargs["shm_size"] = req.shm_size
+        if req.ipc_mode:
+            run_cell_kwargs["ipc_mode"] = req.ipc_mode
+
+        output = client.containers.run(req.image, **run_cell_kwargs)
         return JSONResponse({
             "status": "exited",
             "exit_code": 0,

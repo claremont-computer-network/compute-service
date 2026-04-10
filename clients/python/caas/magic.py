@@ -62,6 +62,10 @@ def _parse_line(line: str) -> argparse.Namespace:
     parser.add_argument("--timeout", type=float, default=None,
                         help=f"Read timeout in seconds (default: {DEFAULT_TIMEOUT}s). "
                              "Increase for long-running jobs.")
+    parser.add_argument("--shm-size", dest="shm_size", default=None,
+                        help="Shared memory size, e.g. '1g'. Recommended for PyTorch DataLoader.")
+    parser.add_argument("--ipc", dest="ipc_mode", default=None,
+                        help="IPC mode, e.g. 'host'. Gives unlimited shared memory to PyTorch workers.")
     # unknown args are silently ignored so custom flags don't break the magic
     ns, _ = parser.parse_known_args(shlex.split(line))
     return ns
@@ -102,7 +106,13 @@ def _dispatch_magic(line: str, cell: str) -> None:
 
     client = _make_client(timeout=timeout)
     try:
-        logs = client.execute_cell(code=cell, image=image, gpu=gpu)
+        logs = client.execute_cell(
+            code=cell,
+            image=image,
+            gpu=gpu,
+            shm_size=args.shm_size,
+            ipc_mode=args.ipc_mode,
+        )
     except CaasTimeoutError as exc:
         raise CaasMagicError(str(exc)) from exc
     except CaasError as exc:

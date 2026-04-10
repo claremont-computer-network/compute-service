@@ -119,6 +119,8 @@ class CaasClient:
         volumes: t.Optional[list] = None,
         gpu: t.Optional[dict] = None,
         detach: bool = True,
+        shm_size: t.Optional[str] = None,
+        ipc_mode: t.Optional[str] = None,
     ) -> dict:
         """Submit a job. Returns the raw response dict."""
         payload: dict = {"image": image, "detach": detach}
@@ -130,6 +132,10 @@ class CaasClient:
             payload["volumes"] = volumes
         if gpu is not None:
             payload["gpu"] = gpu
+        if shm_size is not None:
+            payload["shm_size"] = shm_size
+        if ipc_mode is not None:
+            payload["ipc_mode"] = ipc_mode
         resp = self._call(
             "POST",
             f"{self._base}/v1/execute",
@@ -145,6 +151,8 @@ class CaasClient:
         env: t.Optional[t.Dict[str, str]] = None,
         volumes: t.Optional[list] = None,
         gpu: t.Optional[dict] = None,
+        shm_size: t.Optional[str] = None,
+        ipc_mode: t.Optional[str] = None,
     ) -> str:
         """Send a Python code string to /v1/execute/cell. Returns the logs."""
         payload: dict = {"code": code, "image": image}
@@ -154,6 +162,10 @@ class CaasClient:
             payload["volumes"] = volumes
         if gpu is not None:
             payload["gpu"] = gpu
+        if shm_size is not None:
+            payload["shm_size"] = shm_size
+        if ipc_mode is not None:
+            payload["ipc_mode"] = ipc_mode
         resp = self._call(
             "POST",
             f"{self._base}/v1/execute/cell",

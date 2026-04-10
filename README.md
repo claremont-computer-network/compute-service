@@ -383,3 +383,127 @@ Run the local smoke test (no Docker daemon required):
 ```bash
 uv run python scripts/smoke_test.py
 ```
+
+---
+
+## Provisioning troubleshooting
+
+### SSH: Permission denied (publickey,password)
+
+Ansible cannot connect to the remote machine. Work through these in order:
+
+**1. Verify SSH works at all**
+
+```bash
+ssh -p <port> <user>@<host>
+```
+
+If this fails, fix SSH before touching Ansible. If it prompts for a password, see below.
+
+**2. You are running bootstrap on the machine you want to provision**
+
+Set `ansible_connection: local` in `inventory.yml` — no SSH is involved:
+
+```yaml
+compute-node-1:
+  ansible_host: localhost
+  ansible_connection: local
+  ansible_user: erik
+```
+
+**3. SSH works with a password but not a key**
+
+Generate a new key and copy it to the remote (one-time):
+
+```bash
+ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519_caas -N ""
+ssh-copy-id -i ~/.ssh/id_ed25519_caas -p <port> <user>@<host>
+```
+
+Then set `ansible_ssh_private_key_file: ~/.ssh/id_ed25519_caas` in `inventory.yml`.
+
+**4. Key exists but SSH agent refuses to use it**
+
+Your key has a passphrase and the agent does not have it loaded:
+
+```bash
+ssh-add ~/.ssh/id_ed25519
+```
+
+If you do not know the passphrase, generate a new key without one (see step 3).
+
+**5. Wrong username**
+
+The username in `inventory.yml` must match what SSH accepts. Test with:
+
+```bash
+ssh -v -p <port> <user>@<host> 2>&1 | grep "Authentications"
+```
+
+---
+
+### SSH: sshpass not found
+
+Ansible requires `sshpass` when connecting with a password:
+
+```bash
+sudo apt install sshpass
+```
+
+---
+
+### Ansible: Missing sudo password
+
+Ansible connected successfully but cannot run privileged tasks. Pass the sudo password at runtime:
+
+```bash
+./scripts/bootstrap.sh --ask-become-pass
+```
+
+---
+
+### Ansible: duplicate dict key warning in inventory.yml
+
+```
+[WARNING]: found a duplicate dict key (children). Using last defined value only.
+```
+
+Your `inventory.yml` has the same key written twice — likely caused by merging the example file with your own edits. The file must have a single `children:` block:
+
+```yaml
+all:
+  children:
+    compute_nodes:
+      hosts:
+        compute-node-1:
+          ansible_host: 192.168.1.101
+          ansible_port: 22
+          ansible_user: erik
+          ansible_ssh_private_key_file: ~/.ssh/id_ed25519_caas
+```
+
+---
+
+### Ansible: caas_user is undefined
+
+`ansible/group_vars/all.yml` does not exist or is missing the `caas_user` variable. Create it from the example:
+
+```bash
+mkdir -p ansible/group_vars
+cp ansible/vars.example.yml ansible/group_vars/all.yml
+```
+
+Then edit `ansible/group_vars/all.yml` and set `caas_user` to the Linux user that will run the dispatcher (typically your login user).
+
+---
+
+### Ansible: Error mounting — no NAS or external storage
+
+If you do not have an NFS share or external drive, disable the mount tasks entirely by setting this in `ansible/group_vars/all.yml`:
+
+```yaml
+caas_data_mount_enabled: false
+```
+
+The dispatcher does not require a mount to accept and run jobs. Volume mounts can still be used for jobs by setting `ALLOWED_HOST_DIRS` in `.env` to any local path that exists on the host.
+

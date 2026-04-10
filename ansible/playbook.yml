@@ -63,6 +63,7 @@
         owner: root
         group: root
         mode: '0755'
+      when: caas_data_mount_enabled | default(false)
 
     - name: Ensure mount present in /etc/fstab
       mount:
@@ -71,6 +72,7 @@
         fstype: "{{ caas_data_fstype }}"
         opts: "{{ caas_data_opts }}"
         state: mounted
+      when: caas_data_mount_enabled | default(false)
 
     - name: Notify about successful provisioning
       debug:

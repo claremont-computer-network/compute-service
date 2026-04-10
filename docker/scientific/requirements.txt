@@ -1,0 +1,41 @@
+# ── Core ──────────────────────────────────────────────────────────────────────
+numpy>=1.26,<3
+scipy>=1.13
+sympy>=1.13
+
+# ── Data ──────────────────────────────────────────────────────────────────────
+pandas>=2.2
+pyarrow>=16.0
+h5py>=3.11
+
+# ── ML / training ─────────────────────────────────────────────────────────────
+# torch is already in the NGC base image; listed here for clarity only
+transformers>=4.41
+datasets>=2.20
+accelerate>=0.30
+safetensors>=0.4
+einops>=0.8
+
+# ── Optimisation — gradient-free / black-box ──────────────────────────────────
+optuna>=3.6           # hyperparameter search (TPE, CMA-ES, …)
+nevergrad>=1.0        # gradient-free numerical optimisation
+
+# ── Optimisation — convex ─────────────────────────────────────────────────────
+cvxpy>=1.5            # disciplined convex programming frontend
+clarabel>=0.7         # fast interior-point solver (has ARM64 wheels)
+
+# ── Stats / Bayesian ──────────────────────────────────────────────────────────
+scikit-learn>=1.5
+statsmodels>=0.14
+pymc>=5.15            # probabilistic programming (PyTensor backend)
+arviz>=0.19           # Bayesian visualisation + diagnostics
+
+# ── Visualisation (headless) ──────────────────────────────────────────────────
+matplotlib>=3.9
+seaborn>=0.13
+plotly>=5.22
+
+# ── Utilities ─────────────────────────────────────────────────────────────────
+ipython>=8.24
+tqdm>=4.66
+rich>=13.7

@@ -61,6 +61,7 @@ nav:
       - First Cell: cookbooks/first-cell.md
       - Linear Algebra: cookbooks/linear-algebra.md
       - GPU Workloads: cookbooks/gpu-workload.md
+      - Scientific Computing & Optimisation: cookbooks/scientific-computing.md
       - Custom Images: cookbooks/custom-image.md
   - Operations:
       - Provisioning: operations/provisioning.md

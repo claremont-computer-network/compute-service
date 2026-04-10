@@ -67,6 +67,7 @@ Submit a container job. Jobs can run synchronously (blocking until exit) or deta
 
 ```json
 {
+  "container_id": null,
   "status": "exited",
   "exit_code": 0,
   "logs": "hello world\n"

@@ -75,7 +75,7 @@ client.execute(
     cmd=["sh", "-c", "echo hello"],
     detach=False,
 )
-# {"status": "exited", "exit_code": 0, "logs": "hello\n"}
+# {"container_id": null, "status": "exited", "exit_code": 0, "logs": "hello\n"}
 ```
 
 **Parameters**

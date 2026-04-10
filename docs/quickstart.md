@@ -127,7 +127,7 @@ curl -X POST http://<host>:8000/v1/execute \
 You should see a response like:
 
 ```json
-{"status": "exited", "exit_code": 0, "logs": "compute-node-1\n"}
+{"container_id": null, "status": "exited", "exit_code": 0, "logs": "compute-node-1\n"}
 ```
 
 ---

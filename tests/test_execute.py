@@ -129,14 +129,14 @@ def test_execute_docker_error_returns_500(api_client, mock_docker_client):
 
 def test_execute_no_gpu_by_default(api_client, mock_docker_client):
     """Without a gpu field, device_requests must be None (no GPU allocated)."""
-    api_client.post(EXEC_URL, json={"image": "alpine:3.18"})
+    resp = api_client.post(EXEC_URL, json={"image": "alpine:3.18"})
+    assert resp.status_code == 200
     call_kwargs = mock_docker_client.containers.run.call_args.kwargs
     assert call_kwargs["device_requests"] is None
 
 
 def test_execute_gpu_all(api_client, mock_docker_client):
     """gpu.device_ids='all' passes a DeviceRequest with count=-1."""
-    import docker.types
     resp = api_client.post(EXEC_URL, json={
         "image": "pytorch/pytorch:latest",
         "gpu": {"device_ids": "all"},

@@ -17,6 +17,7 @@ def test_cell_execute_returns_logs(api_client, mock_docker_client):
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "exited"
+    assert body["exit_code"] == 0
     assert body["logs"] == "2\n"
 
 
@@ -86,6 +87,24 @@ def test_cell_execute_docker_error_returns_500(api_client, mock_docker_client):
     mock_docker_client.containers.run.side_effect = docker.errors.DockerException("boom")
     resp = api_client.post(CELL_URL, json={"code": "pass", "image": "python:3.11-slim"})
     assert resp.status_code == 500
+
+
+def test_cell_execute_nonzero_exit_returns_logs(api_client, mock_docker_client):
+    """User code that exits non-zero returns 200 with logs, not a 500."""
+    err = docker.errors.ContainerError(
+        container="fake",
+        exit_status=1,
+        command="python -c ...",
+        image="python:3.11-slim",
+        stderr=b"Traceback (most recent call last):\nNameError: name 'x' is not defined\n",
+    )
+    mock_docker_client.containers.run.side_effect = err
+    resp = api_client.post(CELL_URL, json={"code": "print(x)", "image": "python:3.11-slim"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "exited"
+    assert body["exit_code"] == 1
+    assert "NameError" in body["logs"]
 
 
 def test_cell_execute_missing_image_returns_422(api_client, mock_docker_client):

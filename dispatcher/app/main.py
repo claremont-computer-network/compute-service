@@ -6,7 +6,7 @@ from fastapi import FastAPI, HTTPException, Header, Depends, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 import docker
-from docker.errors import DockerException, NotFound
+from docker.errors import DockerException, NotFound, ContainerError
 from dotenv import load_dotenv
 
 load_dotenv()  # optional .env
@@ -205,7 +205,17 @@ def execute_cell(req: CellRequest, authorized: bool = Depends(get_api_key)):
         )
         return JSONResponse({
             "status": "exited",
+            "exit_code": 0,
             "logs": output.decode(errors="replace"),
+        })
+    except ContainerError as e:
+        # User code exited non-zero — return logs rather than a 500 so the
+        # client can display the traceback inline, just like a local cell.
+        logs = e.stderr.decode(errors="replace") if isinstance(e.stderr, bytes) else (e.stderr or "")
+        return JSONResponse({
+            "status": "exited",
+            "exit_code": e.exit_status,
+            "logs": logs,
         })
     except DockerException as e:
         raise HTTPException(status_code=500, detail=str(e))

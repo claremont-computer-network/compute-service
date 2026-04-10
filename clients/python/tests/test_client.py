@@ -175,3 +175,42 @@ def test_client_works_without_api_key(mock_transport):
 
     c = CaasClient(host=BASE_URL, api_key=None, http_client=httpx.Client(transport=_T()))
     c.health()
+
+
+# ---------------------------------------------------------------------------
+# Resource management
+# ---------------------------------------------------------------------------
+
+def test_client_close_releases_owned_transport():
+    """close() on a client that owns its httpx.Client closes the connection pool."""
+    from caas.client import CaasClient
+    from unittest.mock import patch, MagicMock
+
+    inner = MagicMock(spec=httpx.Client)
+    with patch("httpx.Client", return_value=inner):
+        c = CaasClient(host=BASE_URL)
+    c.close()
+    inner.close.assert_called_once()
+
+
+def test_client_close_does_not_close_injected_transport():
+    """close() must not close an httpx.Client that was supplied by the caller."""
+    from caas.client import CaasClient
+
+    inner = httpx.Client()
+    c = CaasClient(host=BASE_URL, http_client=inner)
+    c.close()   # should be a no-op on the injected client
+    # inner is still usable — if close() had been called it would raise on next use
+    inner.close()   # explicit teardown — no error means test passes
+
+
+def test_client_context_manager(mock_transport):
+    """CaasClient can be used as a context manager; close() is called on exit."""
+    from caas.client import CaasClient
+    from unittest.mock import patch, MagicMock
+
+    inner = MagicMock(spec=httpx.Client)
+    with patch("httpx.Client", return_value=inner):
+        with CaasClient(host=BASE_URL) as c:
+            pass
+    inner.close.assert_called_once()

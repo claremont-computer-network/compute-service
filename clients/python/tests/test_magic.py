@@ -113,6 +113,28 @@ def test_dispatch_raises_when_image_not_set():
         _dispatch_magic("", "print('x')")
 
 
+def test_dispatch_gpu_empty_string_raises():
+    """--gpu with only whitespace/commas raises CaasMagicError before hitting the server."""
+    from caas.magic import _dispatch_magic, _config, CaasMagicError
+    _config.update({"host": "http://host:8000", "api_key": None,
+                    "default_image": "python:3.11-slim", "default_gpu": None})
+    with pytest.raises(CaasMagicError, match="Invalid --gpu"):
+        _dispatch_magic("--gpu ,, ,", "pass")
+
+
+def test_dispatch_caas_error_wrapped_as_magic_error():
+    """A CaasError from the client is re-raised as CaasMagicError (no raw stack trace)."""
+    from caas.magic import _dispatch_magic, _config, CaasMagicError
+    from caas.client import CaasError
+    _config.update({"host": "http://host:8000", "api_key": None,
+                    "default_image": "python:3.11-slim", "default_gpu": None})
+    mock_client = MagicMock()
+    mock_client.execute_cell.side_effect = CaasError("Unauthorized")
+    with patch("caas.magic._make_client", return_value=mock_client):
+        with pytest.raises(CaasMagicError, match="Unauthorized"):
+            _dispatch_magic("", "pass")
+
+
 # ---------------------------------------------------------------------------
 # register_magic
 # ---------------------------------------------------------------------------

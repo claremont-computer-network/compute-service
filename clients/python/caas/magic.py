@@ -25,7 +25,7 @@ import os
 import argparse
 import shlex
 import typing as t
-from caas.client import CaasClient
+from caas.client import CaasClient, CaasError
 
 
 class CaasMagicError(Exception):
@@ -70,6 +70,11 @@ def _build_gpu(gpu_arg: t.Optional[str]) -> t.Optional[dict]:
     if gpu_arg == "all":
         return {"device_ids": "all", "capabilities": ["gpu"]}
     ids = [d.strip() for d in gpu_arg.split(",") if d.strip()]
+    if not ids:
+        raise CaasMagicError(
+            f"Invalid --gpu value {gpu_arg!r}. Use 'all' or a comma-separated "
+            "list of device IDs, e.g. --gpu 0,1"
+        )
     return {"device_ids": ids, "capabilities": ["gpu"]}
 
 
@@ -92,7 +97,10 @@ def _dispatch_magic(line: str, cell: str) -> None:
     gpu = _build_gpu(args.gpu) if args.gpu else _config.get("default_gpu")
 
     client = _make_client()
-    logs = client.execute_cell(code=cell, image=image, gpu=gpu)
+    try:
+        logs = client.execute_cell(code=cell, image=image, gpu=gpu)
+    except CaasError as exc:
+        raise CaasMagicError(str(exc)) from exc
     print(logs, end="")
 
 

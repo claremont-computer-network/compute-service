@@ -24,6 +24,19 @@ class CaasClient:
         self._base = host.rstrip("/")
         self._api_key = api_key
         self._http = http_client or httpx.Client()
+        # track whether we own the client so we know whether to close it
+        self._owns_http = http_client is None
+
+    def close(self) -> None:
+        """Close the underlying HTTP connection pool."""
+        if self._owns_http:
+            self._http.close()
+
+    def __enter__(self) -> "CaasClient":
+        return self
+
+    def __exit__(self, *_) -> None:
+        self.close()
 
     # ── internal ─────────────────────────────────────────────────────────────
 

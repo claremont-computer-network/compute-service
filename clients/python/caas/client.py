@@ -103,8 +103,9 @@ class CaasClient:
             )
             raise CaasTimeoutError(
                 f"The dispatcher did not respond within {timeout_val}s.\n"
-                f"• Increase the timeout: CaasClient(host=..., timeout=300)\n"
-                f"• Or retry the request if appropriate for the operation"
+                f"The job may still be running on the remote.\n"
+                f"• For long-running workloads, use detach=True and poll logs()\n"
+                f"• Or increase the timeout: CaasClient(host=..., timeout=300)"
             ) from exc
         return resp
 

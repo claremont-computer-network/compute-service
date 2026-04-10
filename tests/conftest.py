@@ -60,6 +60,8 @@ def mock_docker_client(monkeypatch):
         main_module.client = dc          # belt-and-suspenders
         main_module.API_KEY = None       # no auth by default
         main_module.ALLOWED_HOST_DIRS = ["/mnt", "/data", "/tmp"]
+        main_module.ALLOW_IPC_HOST = False
+        main_module.MAX_SHM_SIZE_MB = 8192
 
         yield dc
 

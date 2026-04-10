@@ -280,3 +280,63 @@ def test_timeout_error_is_subclass_of_caas_error():
     """CaasTimeoutError is a CaasError so existing except CaasError handlers still work."""
     from caas.client import CaasError, CaasTimeoutError
     assert issubclass(CaasTimeoutError, CaasError)
+
+
+# ---------------------------------------------------------------------------
+# shm_size / ipc_mode payload tests
+# ---------------------------------------------------------------------------
+
+def test_execute_sends_shm_and_ipc_in_payload(client, mock_transport):
+    """execute() forwards shm_size and ipc_mode in the JSON body."""
+    import json
+
+    def _check(request):
+        body = json.loads(request.content)
+        assert body["shm_size"] == "2g"
+        assert body["ipc_mode"] == "host"
+        return _make_response(200, {"container_id": "abc123", "status": "running"})
+
+    mock_transport[("POST", f"{BASE_URL}/v1/execute")] = _check
+    client.execute(image="pytorch/pytorch:latest", shm_size="2g", ipc_mode="host")
+
+
+def test_execute_omits_shm_and_ipc_when_none(client, mock_transport):
+    """execute() does not include shm_size or ipc_mode keys when they are None."""
+    import json
+
+    def _check(request):
+        body = json.loads(request.content)
+        assert "shm_size" not in body
+        assert "ipc_mode" not in body
+        return _make_response(200, {"container_id": "abc123", "status": "running"})
+
+    mock_transport[("POST", f"{BASE_URL}/v1/execute")] = _check
+    client.execute(image="alpine:3.18")
+
+
+def test_execute_cell_sends_shm_and_ipc_in_payload(client, mock_transport):
+    """execute_cell() forwards shm_size and ipc_mode in the JSON body."""
+    import json
+
+    def _check(request):
+        body = json.loads(request.content)
+        assert body["shm_size"] == "512m"
+        assert body["ipc_mode"] == "host"
+        return _make_response(200, {"status": "exited", "exit_code": 0, "logs": ""})
+
+    mock_transport[("POST", f"{BASE_URL}/v1/execute/cell")] = _check
+    client.execute_cell(code="print('hi')", image="python:3.12", shm_size="512m", ipc_mode="host")
+
+
+def test_execute_cell_omits_shm_and_ipc_when_none(client, mock_transport):
+    """execute_cell() does not include shm_size or ipc_mode keys when they are None."""
+    import json
+
+    def _check(request):
+        body = json.loads(request.content)
+        assert "shm_size" not in body
+        assert "ipc_mode" not in body
+        return _make_response(200, {"status": "exited", "exit_code": 0, "logs": ""})
+
+    mock_transport[("POST", f"{BASE_URL}/v1/execute/cell")] = _check
+    client.execute_cell(code="print('hi')", image="python:3.12")

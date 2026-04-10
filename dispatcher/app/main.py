@@ -17,6 +17,10 @@ API_KEY = os.getenv("DISPATCHER_API_KEY")
 # Explicit allow-list of host paths that may be bind-mounted into jobs.
 # Empty string → no mounts allowed. Must be set deliberately.
 ALLOWED_HOST_DIRS = [p for p in os.getenv("ALLOWED_HOST_DIRS", "").split(",") if p.strip()]
+# Controls whether ipc_mode=host is permitted (Docker shares host IPC namespace).
+ALLOW_IPC_HOST = os.getenv("ALLOW_IPC_HOST", "false").lower() == "true"
+# Maximum shared-memory segment size (in MiB) that callers may request.
+MAX_SHM_SIZE_MB = int(os.getenv("MAX_SHM_SIZE_MB", "8192"))
 
 
 @asynccontextmanager
@@ -102,6 +106,51 @@ def _validate_volumes(volumes: t.List[VolumeSpec]):
     return bindings
 
 
+_SHM_SUFFIXES: dict[str, int] = {"b": 1, "k": 1024, "m": 1024**2, "g": 1024**3}
+
+
+def _validate_shm_ipc(shm_size: t.Optional[str], ipc_mode: t.Optional[str]) -> None:
+    """Validate shm_size and ipc_mode against server-side policy.
+
+    Raises HTTPException(400) when:
+    - ipc_mode is requested but ALLOW_IPC_HOST env var is not set.
+    - ipc_mode is a value other than "host".
+    - shm_size exceeds the MAX_SHM_SIZE_MB limit.
+    - shm_size cannot be parsed.
+    """
+    if ipc_mode is not None:
+        if not ALLOW_IPC_HOST:
+            raise HTTPException(
+                status_code=400,
+                detail="ipc_mode requires ALLOW_IPC_HOST=true on the dispatcher",
+            )
+        if ipc_mode != "host":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported ipc_mode: {ipc_mode!r}. Only 'host' is permitted.",
+            )
+    if shm_size is not None:
+        raw = shm_size.strip().lower()
+        suffix = raw[-1] if raw and raw[-1] in _SHM_SUFFIXES else "b"
+        number_part = raw[:-1] if raw[-1] in _SHM_SUFFIXES else raw
+        try:
+            size_bytes = float(number_part) * _SHM_SUFFIXES[suffix]
+        except (ValueError, IndexError):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot parse shm_size: {shm_size!r}. Expected a value like '512m' or '2g'.",
+            )
+        size_mb = size_bytes / (1024**2)
+        if size_mb > MAX_SHM_SIZE_MB:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"shm_size {shm_size!r} exceeds the server limit of {MAX_SHM_SIZE_MB} MiB. "
+                    f"Reduce the value or ask the administrator to raise MAX_SHM_SIZE_MB."
+                ),
+            )
+
+
 def _build_device_requests(gpu: GpuRequest) -> list:
     """Translate a GpuRequest into a Docker SDK DeviceRequest list.
 
@@ -155,6 +204,7 @@ def execute(req: ExecuteRequest, authorized: bool = Depends(get_api_key)):
             stderr=True,
             device_requests=device_requests,
         )
+        _validate_shm_ipc(req.shm_size, req.ipc_mode)
         if req.shm_size:
             run_kwargs["shm_size"] = req.shm_size
         if req.ipc_mode:
@@ -228,6 +278,7 @@ def execute_cell(req: CellRequest, authorized: bool = Depends(get_api_key)):
             detach=False,
             remove=True,
         )
+        _validate_shm_ipc(req.shm_size, req.ipc_mode)
         if req.shm_size:
             run_cell_kwargs["shm_size"] = req.shm_size
         if req.ipc_mode:

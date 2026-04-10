@@ -59,13 +59,8 @@ print(f"std   : {C.std():.4f}")
 ## NumPy matmul — custom image (faster)
 
 If you've built and pushed a NumPy image (see [Custom Images](custom-image.md)), substitute
-your actual image name. The examples below show the pattern — replace
+your actual image name directly in the `--image` flag. Replace
 `ghcr.io/yourorg/caas-numpy:latest` with whatever you pushed:
-
-```python
-# Replace this with your actual image before running
-NUMPY_IMAGE = "ghcr.io/yourorg/caas-numpy:latest"
-```
 
 ```python
 %%dispatch --image ghcr.io/yourorg/caas-numpy:latest

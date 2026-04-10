@@ -29,7 +29,7 @@ Requests without a valid key return HTTP 401. If `DISPATCHER_API_KEY` is unset o
 
 ### `GET /health`
 
-Returns a simple liveness response. If the Docker daemon is unreachable the application will fail to start.
+Returns a simple liveness response. Returns HTTP 500 if the Docker daemon is unreachable — the service may start successfully but this endpoint will fail until Docker is available.
 
 **Response**
 
@@ -74,7 +74,7 @@ Submit a container job. Jobs can run synchronously (blocking until exit) or deta
 ```
 
 !!! note "Non-zero exit codes"
-    A container that exits with a non-zero code (e.g. a Python exception) returns HTTP 200 with
+    A container that exits with a non-zero code returns HTTP 200 with
     `"exit_code": <n>` and the output in `"logs"`. It is the caller's responsibility to check
     the exit code.
 

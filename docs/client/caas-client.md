@@ -97,7 +97,7 @@ result = client.execute(
     cmd=["python", "-c", "print(2 ** 10)"],
     detach=False,
 )
-print(result["logs"])   # "1024\n"
+print(result["logs"])       # "1024\n"
 print(result["exit_code"])  # 0
 ```
 

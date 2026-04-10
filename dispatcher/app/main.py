@@ -156,17 +156,27 @@ def execute(req: ExecuteRequest, authorized: bool = Depends(get_api_key)):
             return JSONResponse({"container_id": container.id, "status": "running"})
         else:
             # Blocking run – wait for completion and return logs inline
-            output = client.containers.run(
-                req.image,
-                detach=False,
-                remove=True,
-                **run_kwargs,
-            )
-            return JSONResponse({
-                "container_id": None,
-                "status": "exited",
-                "logs": output.decode(errors="replace"),
-            })
+            try:
+                output = client.containers.run(
+                    req.image,
+                    detach=False,
+                    remove=True,
+                    **run_kwargs,
+                )
+                return JSONResponse({
+                    "status": "exited",
+                    "exit_code": 0,
+                    "logs": output.decode(errors="replace"),
+                })
+            except ContainerError as e:
+                # Non-zero exit — return logs inline rather than a 500 so the
+                # caller can inspect the output.
+                logs = e.stderr.decode(errors="replace") if isinstance(e.stderr, bytes) else (e.stderr or "")
+                return JSONResponse({
+                    "status": "exited",
+                    "exit_code": e.exit_status,
+                    "logs": logs,
+                })
     except DockerException as e:
         raise HTTPException(status_code=500, detail=str(e))
 

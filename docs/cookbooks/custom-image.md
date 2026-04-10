@@ -83,13 +83,13 @@ can build the image on the remote machine itself and use it immediately as a loc
 **1. Copy a Dockerfile to the remote machine**
 
 ```bash
-scp -P 2222 Dockerfile erik@54.89.192.212:~/caas-numpy/
+scp -P <port> Dockerfile <user>@<host>:~/caas-numpy/
 ```
 
 Or write it directly over SSH:
 
 ```bash
-ssh -p 2222 erik@54.89.192.212 "mkdir -p ~/caas-numpy && cat > ~/caas-numpy/Dockerfile" << 'EOF'
+ssh -p <port> <user>@<host> "mkdir -p ~/caas-numpy && cat > ~/caas-numpy/Dockerfile" << 'EOF'
 FROM python:3.12-slim
 RUN pip install --no-cache-dir numpy scipy
 CMD ["python"]
@@ -99,7 +99,7 @@ EOF
 **2. Build on the remote machine**
 
 ```bash
-ssh -p 2222 erik@54.89.192.212 "docker build -t caas-numpy:latest ~/caas-numpy/"
+ssh -p <port> <user>@<host> "docker build -t caas-numpy:latest ~/caas-numpy/"
 ```
 
 **3. Use it immediately**

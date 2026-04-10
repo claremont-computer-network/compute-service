@@ -18,6 +18,19 @@ if [ ! -f "$INVENTORY" ]; then
 fi
 
 echo "Running Ansible playbook against inventory: $INVENTORY"
-ansible-playbook -i "$INVENTORY" "$ROOT_DIR/ansible/playbook.yml" --diff
+echo "Extra ansible-playbook args: $*"
+echo ""
+echo "Tip: common extra flags:"
+echo "  --ask-pass                        prompt for SSH password"
+echo "  --ask-become-pass                 prompt for sudo password"
+echo "  --private-key ~/.ssh/my_key       use a specific SSH key"
+echo "  -e ansible_port=2222              override SSH port"
+echo ""
+
+ansible-playbook \
+  -i "$INVENTORY" \
+  "$ROOT_DIR/ansible/playbook.yml" \
+  --diff \
+  "$@"
 
 echo "Bootstrap complete."

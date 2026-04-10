@@ -15,13 +15,25 @@ Run GPU-accelerated code on a remote machine from a notebook cell.
 
 ## Verify GPU availability
 
-Before running any GPU workload, check that the dispatcher can see the GPU:
+Before running any GPU workload, check that the dispatcher can see the GPU. `nvidia-smi` is a
+shell tool, not a Python script, so use `CaasClient.execute` (not `execute_cell`) with the
+`nvidia/cuda` base image, which has `nvidia-smi` but no Python:
 
 ```python
-%%dispatch --image nvidia/cuda:12.3.2-base-ubuntu22.04 --gpu all
-import subprocess
-result = subprocess.run(["nvidia-smi"], capture_output=True, text=True)
-print(result.stdout)
+from caas import CaasClient
+import os
+
+with CaasClient(
+    host=os.environ["CAAS_HOST"],
+    api_key=os.environ.get("DISPATCHER_API_KEY"),
+) as client:
+    result = client.execute(
+        image="nvidia/cuda:12.3.2-base-ubuntu22.04",
+        cmd=["nvidia-smi"],
+        gpu={"device_ids": "all"},
+        detach=False,
+    )
+    print(result["logs"])
 ```
 
 Expected output:
@@ -33,6 +45,12 @@ Expected output:
 | GPU  Name        Persistence-M| Bus-Id        Disp.A | Volatile Uncorr. ECC |
 ...
 ```
+
+!!! warning "Don't use `%%dispatch` for this check"
+    `%%dispatch` calls `/v1/execute/cell`, which runs `python -c <code>`. The `nvidia/cuda`
+    base image has no Python, so the container will fail with
+    `exec: "python": executable file not found in $PATH`. Use `CaasClient.execute` with an
+    explicit `cmd` instead, as shown above.
 
 If you see `nvidia-smi: not found`, the GPU provisioning step did not complete. Re-run the
 playbook with `caas_gpu_enabled: true`.

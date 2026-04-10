@@ -190,6 +190,31 @@ The container started but couldn't see the GPU:
 3. Confirm Docker is using the NVIDIA runtime: `docker info | grep -i runtime`.
 4. Re-run the Ansible playbook with `caas_gpu_enabled: true`.
 
+### `exec: "python": executable file not found in $PATH`
+
+The image you passed to `%%dispatch` (or `execute_cell`) does not have Python installed.
+Common culprit: `nvidia/cuda:*-base` images, which contain CUDA libraries and `nvidia-smi`
+but no Python interpreter.
+
+- For `%%dispatch` cells, use an image that includes Python, e.g.
+  `pytorch/pytorch:2.3.0-cuda12.1-cudnn8-runtime`.
+- To run shell commands like `nvidia-smi`, use `CaasClient.execute` with an explicit `cmd`
+  instead of `%%dispatch`:
+
+```python
+from caas import CaasClient
+import os
+
+with CaasClient(host=os.environ["CAAS_HOST"], api_key=os.environ.get("DISPATCHER_API_KEY")) as c:
+    result = c.execute(
+        image="nvidia/cuda:12.3.2-base-ubuntu22.04",
+        cmd=["nvidia-smi"],
+        gpu={"device_ids": "all"},
+        detach=False,
+    )
+    print(result["logs"])
+```
+
 ### `could not select device driver "nvidia"`
 
 The NVIDIA container runtime is not registered with Docker:

@@ -74,7 +74,7 @@ class CellRequest(BaseModel):
 
 
 def get_api_key(x_api_key: t.Optional[str] = Header(None)):
-    if API_KEY is None:
+    if not API_KEY:
         # allow running in dev if not set, but warn in logs
         return True
     if not x_api_key or x_api_key != API_KEY:

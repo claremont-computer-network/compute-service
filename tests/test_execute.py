@@ -183,3 +183,38 @@ def test_execute_gpu_custom_capabilities(api_client, mock_docker_client):
     call_kwargs = mock_docker_client.containers.run.call_args.kwargs
     dr = call_kwargs["device_requests"]
     assert ["gpu", "compute"] in dr[0].capabilities
+
+
+# ---------------------------------------------------------------------------
+# Synchronous execution (detach=False)
+# ---------------------------------------------------------------------------
+
+def test_execute_sync_returns_exit_code_zero(api_client, mock_docker_client):
+    """detach=False returns exit_code=0, logs, and container_id=null on success."""
+    mock_docker_client.containers.run.return_value = b"hello sync\n"
+    resp = api_client.post(EXEC_URL, json={"image": "alpine:3.18", "detach": False})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "exited"
+    assert body["exit_code"] == 0
+    assert "hello sync" in body["logs"]
+    assert body["container_id"] is None
+
+
+def test_execute_sync_nonzero_exit_returns_200_with_logs(api_client, mock_docker_client):
+    """detach=False with a non-zero exit still returns HTTP 200 with exit_code and logs."""
+    from unittest.mock import MagicMock
+    mock_docker_client.containers.run.side_effect = docker.errors.ContainerError(
+        container=MagicMock(),
+        exit_status=1,
+        command="sh",
+        image="alpine:3.18",
+        stderr=b"something went wrong\n",
+    )
+    resp = api_client.post(EXEC_URL, json={"image": "alpine:3.18", "detach": False})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "exited"
+    assert body["exit_code"] == 1
+    assert "something went wrong" in body["logs"]
+    assert body["container_id"] is None

@@ -115,10 +115,17 @@ class CaasClient:
         )
         return self._check(resp).json()["logs"]
 
-    def logs(self, container_id: str) -> str:
-        """Fetch logs for a detached container."""
-        resp = self._http.get(
-            f"{self._base}/v1/logs/{container_id}",
-            headers=self._headers(),
-        )
+    def logs(self, container_id: str, follow: bool = False) -> str:
+        """Fetch logs for a detached container.
+
+        Pass follow=True to stream until the container exits (blocks until done).
+        The dispatcher returns text/plain when streaming, JSON otherwise.
+        """
+        url = f"{self._base}/v1/logs/{container_id}"
+        params = {"follow": "true"} if follow else {}
+        if follow:
+            with self._http.stream("GET", url, params=params, headers=self._headers()) as resp:
+                self._check(resp)
+                return "".join(resp.iter_text())
+        resp = self._http.get(url, params=params, headers=self._headers())
         return self._check(resp).json()["logs"]

@@ -1,0 +1,68 @@
+site_name: compute-service
+site_description: Self-hosted compute-as-a-service — run containerised workloads on a remote machine via HTTP
+site_url: https://claremont-computer-network.github.io/compute-service
+repo_url: https://github.com/claremont-computer-network/compute-service
+repo_name: claremont-computer-network/compute-service
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - toc.integrate
+    - content.code.copy
+    - content.code.annotate
+  icon:
+    repo: fontawesome/brands/github
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.tabbed:
+      alternate_style: true
+  - tables
+  - attr_list
+  - md_in_html
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+nav:
+  - Home: index.md
+  - Quickstart: quickstart.md
+  - Configuration: configuration.md
+  - API Reference: api-reference.md
+  - Python Client:
+      - Installation: client/installation.md
+      - CaasClient: client/caas-client.md
+      - "%%dispatch Magic": client/dispatch-magic.md
+  - Cookbooks:
+      - First Cell: cookbooks/first-cell.md
+      - Linear Algebra: cookbooks/linear-algebra.md
+      - GPU Workloads: cookbooks/gpu-workload.md
+      - Custom Images: cookbooks/custom-image.md
+  - Operations:
+      - Provisioning: operations/provisioning.md
+      - Troubleshooting: operations/troubleshooting.md
+      - Security: operations/security.md

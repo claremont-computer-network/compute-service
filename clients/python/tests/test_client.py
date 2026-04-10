@@ -236,3 +236,42 @@ def test_client_context_manager(mock_transport):
         with CaasClient(host=BASE_URL) as c:
             pass
     inner.close.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Timeout handling
+# ---------------------------------------------------------------------------
+
+def test_timeout_constructor_sets_httpx_timeout():
+    """CaasClient(timeout=N) passes N to the underlying httpx.Client."""
+    from caas.client import CaasClient
+    from unittest.mock import patch, MagicMock
+
+    inner = MagicMock(spec=httpx.Client)
+    with patch("httpx.Client", return_value=inner) as mock_cls:
+        CaasClient(host=BASE_URL, timeout=300.0)
+    mock_cls.assert_called_once_with(timeout=300.0)
+
+
+def test_read_timeout_raises_caas_timeout_error(mock_transport):
+    """A ReadTimeout from httpx is converted to CaasTimeoutError with a helpful message."""
+    from caas.client import CaasClient, CaasTimeoutError
+
+    def _raise_timeout(request):
+        raise httpx.ReadTimeout("timed out", request=request)
+
+    mock_transport[("GET", f"{BASE_URL}/health")] = _raise_timeout
+
+    class _T(httpx.BaseTransport):
+        def handle_request(self, request):
+            return mock_transport[(request.method, str(request.url).split("?")[0])](request)
+
+    c = CaasClient(host=BASE_URL, api_key=API_KEY, http_client=httpx.Client(transport=_T()))
+    with pytest.raises(CaasTimeoutError, match="did not respond within"):
+        c.health()
+
+
+def test_timeout_error_is_subclass_of_caas_error():
+    """CaasTimeoutError is a CaasError so existing except CaasError handlers still work."""
+    from caas.client import CaasError, CaasTimeoutError
+    assert issubclass(CaasTimeoutError, CaasError)

@@ -14,16 +14,43 @@ class CaasError(Exception):
     """Raised when the dispatcher returns a non-2xx response."""
 
 
+class CaasTimeoutError(CaasError):
+    """Raised when the dispatcher does not respond within the configured timeout.
+
+    The job may still be running on the remote — use detach=True and poll
+    logs() for long-running workloads, or increase the timeout.
+    """
+
+
+# Default read timeout for synchronous (blocking) requests.
+# Synchronous jobs block until the container exits, so this needs to be
+# longer than the longest expected job.  Override per-client via the
+# timeout= constructor argument.
+DEFAULT_TIMEOUT = 60.0  # seconds
+
+
 class CaasClient:
     def __init__(
         self,
         host: str,
         api_key: t.Optional[str] = None,
         http_client: t.Optional[httpx.Client] = None,
+        timeout: float = DEFAULT_TIMEOUT,
     ):
+        """Create a CaasClient.
+
+        Args:
+            host:        Dispatcher base URL, e.g. "http://192.168.1.101:8000".
+            api_key:     Value for the X-API-Key header (optional).
+            http_client: Inject a custom httpx.Client (e.g. for tests).
+                         When provided, the caller is responsible for closing it.
+            timeout:     Read timeout in seconds for blocking requests.
+                         Ignored when http_client is supplied.
+                         Default: 60 s.  Increase for long-running jobs.
+        """
         self._base = host.rstrip("/")
         self._api_key = api_key
-        self._http = http_client or httpx.Client()
+        self._http = http_client or httpx.Client(timeout=timeout)
         # track whether we own the client so we know whether to close it
         self._owns_http = http_client is None
 
@@ -59,11 +86,29 @@ class CaasClient:
             raise CaasError(detail)
         return resp
 
+    def _call(self, method: str, url: str, **kwargs) -> httpx.Response:
+        """Make an HTTP request, converting ReadTimeout into CaasTimeoutError."""
+        try:
+            resp = self._http.request(method, url, **kwargs)
+        except httpx.ReadTimeout as exc:
+            timeout_val = (
+                self._http.timeout.read
+                if hasattr(self._http, "timeout")
+                else "unknown"
+            )
+            raise CaasTimeoutError(
+                f"The dispatcher did not respond within {timeout_val}s.\n"
+                f"The job may still be running on the remote.\n"
+                f"• For long jobs use detach=True and poll logs().\n"
+                f"• Or increase the timeout: CaasClient(host=..., timeout=300)"
+            ) from exc
+        return resp
+
     # ── public API ────────────────────────────────────────────────────────────
 
     def health(self) -> dict:
         """Return the dispatcher health status."""
-        resp = self._http.get(f"{self._base}/health", headers=self._headers())
+        resp = self._call("GET", f"{self._base}/health", headers=self._headers())
         return self._check(resp).json()
 
     def execute(
@@ -85,7 +130,8 @@ class CaasClient:
             payload["volumes"] = volumes
         if gpu is not None:
             payload["gpu"] = gpu
-        resp = self._http.post(
+        resp = self._call(
+            "POST",
             f"{self._base}/v1/execute",
             json=payload,
             headers=self._headers(),
@@ -108,7 +154,8 @@ class CaasClient:
             payload["volumes"] = volumes
         if gpu is not None:
             payload["gpu"] = gpu
-        resp = self._http.post(
+        resp = self._call(
+            "POST",
             f"{self._base}/v1/execute/cell",
             json=payload,
             headers=self._headers(),
@@ -127,5 +174,5 @@ class CaasClient:
             with self._http.stream("GET", url, params=params, headers=self._headers()) as resp:
                 self._check(resp)
                 return "".join(resp.iter_text())
-        resp = self._http.get(url, params=params, headers=self._headers())
+        resp = self._call("GET", url, params=params, headers=self._headers())
         return self._check(resp).json()["logs"]

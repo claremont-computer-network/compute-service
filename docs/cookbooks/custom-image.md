@@ -75,6 +75,55 @@ print(pipe("The remote machine is doing the work."))
 
 ---
 
+## Building directly on the remote machine
+
+If you don't have a registry, or you want to iterate quickly without a push/pull cycle, you
+can build the image on the remote machine itself and use it immediately as a local image.
+
+**1. Copy a Dockerfile to the remote machine**
+
+```bash
+scp -P 2222 Dockerfile erik@54.89.192.212:~/caas-numpy/
+```
+
+Or write it directly over SSH:
+
+```bash
+ssh -p 2222 erik@54.89.192.212 "mkdir -p ~/caas-numpy && cat > ~/caas-numpy/Dockerfile" << 'EOF'
+FROM python:3.12-slim
+RUN pip install --no-cache-dir numpy scipy
+CMD ["python"]
+EOF
+```
+
+**2. Build on the remote machine**
+
+```bash
+ssh -p 2222 erik@54.89.192.212 "docker build -t caas-numpy:latest ~/caas-numpy/"
+```
+
+**3. Use it immediately**
+
+Because the image is already present on the host, the dispatcher uses it without pulling:
+
+```python
+%%dispatch --image caas-numpy:latest
+import numpy as np
+print(np.__version__)
+```
+
+!!! tip "No registry needed"
+    Local image names (no registry prefix) work fine — the dispatcher runs `docker run` on
+    the same machine that has the image. You only need a registry if you want to share the
+    image or pull it from multiple machines.
+
+!!! note "ARM64 builds"
+    Building on the remote machine is especially useful for ARM64 hosts (like a Grace
+    Blackwell GB10) where pre-built amd64 images don't work. The image built on the host
+    will always match its architecture.
+
+---
+
 ## Making the image available on the remote machine
 
 The dispatcher pulls images from the Docker registry when a job runs. Two options:

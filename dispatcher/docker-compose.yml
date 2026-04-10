@@ -1,0 +1,17 @@
+services:
+  dispatcher:
+    build:
+      context: .
+    image: compute-service/dispatcher:latest
+    container_name: caas-dispatcher
+    ports:
+      - "8000:8000"
+    environment:
+      # Set DISPATCHER_API_KEY in a local .env file (never commit it).
+      # Generate: python3 -c "import secrets; print(secrets.token_hex(32))"
+      # Leaving it unset disables auth – only acceptable for local dev.
+      - DISPATCHER_API_KEY=${DISPATCHER_API_KEY:-}
+      - ALLOWED_HOST_DIRS=${ALLOWED_HOST_DIRS:-/mnt,/data}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped

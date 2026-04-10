@@ -1,0 +1,77 @@
+- hosts: compute_nodes
+  become: true
+  # Variables are loaded from group_vars/all.yml or host_vars/<host>.yml
+  # (both gitignored). Copy ansible/vars.example.yml as a starting point.
+  # Do NOT add vars_files pointing at vars.example.yml in production –
+  # that file contains placeholder values only.
+
+  tasks:
+    - name: Ensure apt cache is up to date (Debian/Ubuntu)
+      apt:
+        update_cache: yes
+      when: ansible_os_family == 'Debian'
+
+    - name: Install prerequisite packages
+      package:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gnupg
+          - lsb-release
+        state: present
+      when: ansible_os_family == 'Debian'
+
+    - name: Add Docker GPG key (Debian/Ubuntu)
+      apt_key:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        state: present
+      when: ansible_os_family == 'Debian'
+
+    - name: Add Docker repository (Debian/Ubuntu)
+      apt_repository:
+        repo: deb [arch=amd64] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable
+        state: present
+      when: ansible_os_family == 'Debian'
+
+    - name: Install Docker CE
+      package:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+        state: present
+      when: ansible_os_family == 'Debian'
+
+    - name: Ensure docker service is running and enabled
+      service:
+        name: docker
+        state: started
+        enabled: true
+
+    - name: Ensure compute-service user is present
+      user:
+        name: "{{ caas_user }}"
+        state: present
+        groups: docker
+        append: true
+
+    - name: Ensure data mount directory exists
+      file:
+        path: "{{ caas_data_mount }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Ensure mount present in /etc/fstab
+      mount:
+        path: "{{ caas_data_mount }}"
+        src: "{{ caas_data_source }}"
+        fstype: "{{ caas_data_fstype }}"
+        opts: "{{ caas_data_opts }}"
+        state: mounted
+
+    - name: Notify about successful provisioning
+      debug:
+        msg: "Compute-service provisioning tasks completed. Ensure any machine-specific tuning is handled in host_vars or group_vars."

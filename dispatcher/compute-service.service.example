@@ -1,0 +1,23 @@
+[Unit]
+Description=Compute Service Dispatcher
+After=network.target docker.service
+
+[Service]
+User=caas
+Group=caas
+# REQUIRED: set a strong random secret before deploying.
+# Generate one with: python3 -c "import secrets; print(secrets.token_hex(32))"
+# Do NOT use the placeholder value below in production.
+EnvironmentFile=/etc/compute-service/dispatcher.env
+WorkingDirectory=/opt/compute-service/dispatcher
+ExecStart=/usr/bin/docker run --rm -p 8000:8000 \
+  --env-file /etc/compute-service/dispatcher.env \
+  --name caas-dispatcher \
+  --read-only \
+  --security-opt no-new-privileges \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  compute-service/dispatcher:latest
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

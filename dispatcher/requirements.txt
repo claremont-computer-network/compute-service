@@ -1,0 +1,4 @@
+fastapi>=0.95.0
+uvicorn[standard]>=0.22.0
+docker>=6.0.0
+python-dotenv>=1.0.0

@@ -1,0 +1,15 @@
+# Example vars for the compute-service playbook.
+# Copy to group_vars/all.yml or host_vars/<host>.yml locally (not committed).
+
+# Path where the external storage (NAS) should be mounted on the host
+caas_data_mount: /mnt/caas-data
+
+# The device or remote export to mount. Can be an NFS path like "nfs.example.com:/export/path"
+caas_data_source: "nfs.example.com:/exports/caas"
+
+# Mount options
+caas_data_fstype: nfs
+caas_data_opts: defaults,_netdev
+
+# User that should be added to the docker group (so the dispatcher can manage Docker)
+caas_user: ubuntu

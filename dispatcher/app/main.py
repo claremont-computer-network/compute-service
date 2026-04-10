@@ -1,0 +1,145 @@
+import os
+import typing as t
+import logging
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, HTTPException, Header, Depends, Request
+from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import BaseModel, Field
+import docker
+from docker.errors import DockerException, NotFound
+from dotenv import load_dotenv
+
+load_dotenv()  # optional .env
+
+logger = logging.getLogger("caas.dispatcher")
+
+API_KEY = os.getenv("DISPATCHER_API_KEY")
+# Explicit allow-list of host paths that may be bind-mounted into jobs.
+# Empty string → no mounts allowed. Must be set deliberately.
+ALLOWED_HOST_DIRS = [p for p in os.getenv("ALLOWED_HOST_DIRS", "").split(",") if p.strip()]
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    if not API_KEY:
+        logger.warning(
+            "DISPATCHER_API_KEY is not set – all requests are accepted without "
+            "authentication. Set this variable before exposing the service."
+        )
+    if not ALLOWED_HOST_DIRS:
+        logger.warning(
+            "ALLOWED_HOST_DIRS is not set – volume mounts will be rejected for all "
+            "requests. Set this variable to permit specific host paths."
+        )
+    yield
+
+
+app = FastAPI(title="Compute Service Dispatcher", lifespan=lifespan)
+
+client = docker.from_env()
+
+
+class VolumeSpec(BaseModel):
+    host_path: str
+    container_path: str
+    mode: str = Field("rw", description="Mount mode: rw or ro")
+
+
+class ExecuteRequest(BaseModel):
+    image: str
+    cmd: t.Union[str, t.List[str], None] = None
+    env: t.Optional[t.Dict[str, str]] = None
+    volumes: t.Optional[t.List[VolumeSpec]] = None
+    detach: bool = True
+
+
+def get_api_key(x_api_key: t.Optional[str] = Header(None)):
+    if API_KEY is None:
+        # allow running in dev if not set, but warn in logs
+        return True
+    if not x_api_key or x_api_key != API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid API Key")
+    return True
+
+
+def _validate_volumes(volumes: t.List[VolumeSpec]):
+    bindings = {}
+    for v in volumes:
+        hp = os.path.abspath(v.host_path)
+        allowed = any(hp == p or hp.startswith(p + os.sep) for p in ALLOWED_HOST_DIRS if p)
+        if not allowed:
+            raise HTTPException(status_code=400, detail=f"Host path not allowed: {hp}")
+        bindings[hp] = {"bind": v.container_path, "mode": v.mode}
+    return bindings
+
+
+@app.post("/v1/execute")
+def execute(req: ExecuteRequest, authorized: bool = Depends(get_api_key)):
+    try:
+        volumes = None
+        if req.volumes:
+            volumes = _validate_volumes(req.volumes)
+
+        # ensure the image is available (pull if needed)
+        try:
+            client.images.get(req.image)
+        except docker.errors.ImageNotFound:
+            client.images.pull(req.image)
+
+        if req.detach:
+            container = client.containers.run(
+                req.image,
+                command=req.cmd,
+                environment=req.env,
+                volumes=volumes,
+                detach=True,
+                stdout=True,
+                stderr=True,
+            )
+            return JSONResponse({"container_id": container.id, "status": "running"})
+        else:
+            # Blocking run – wait for completion and return logs inline
+            output = client.containers.run(
+                req.image,
+                command=req.cmd,
+                environment=req.env,
+                volumes=volumes,
+                detach=False,
+                stdout=True,
+                stderr=True,
+                remove=True,
+            )
+            return JSONResponse({
+                "container_id": None,
+                "status": "exited",
+                "logs": output.decode(errors="replace"),
+            })
+    except DockerException as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/v1/logs/{container_id}")
+def get_logs(container_id: str, follow: bool = False, authorized: bool = Depends(get_api_key)):
+    try:
+        cont = client.containers.get(container_id)
+    except NotFound:
+        raise HTTPException(status_code=404, detail="Container not found")
+
+    if follow:
+        def stream_logs():
+            for chunk in cont.logs(stream=True, stdout=True, stderr=True, follow=True):
+                yield chunk
+
+        return StreamingResponse(stream_logs(), media_type="text/plain")
+
+    logs = cont.logs(stdout=True, stderr=True, tail=1000)
+    return JSONResponse({"container_id": container_id, "logs": logs.decode(errors='replace')})
+
+
+@app.get("/health")
+def health():
+    try:
+        client.ping()
+        return {"status": "ok"}
+    except Exception:
+        raise HTTPException(status_code=500, detail="Docker unreachable")

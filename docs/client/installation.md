@@ -37,7 +37,7 @@ pip install -e clients/python
 Install dev dependencies and run the client tests:
 
 ```bash
-uv pip install -r dispatcher/requirements-dev.txt
+uv pip install -e "clients/python[dev]"
 uv run pytest clients/python/tests/ -v
 ```
 

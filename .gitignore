@@ -1,9 +1,12 @@
 # Ignore local inventory and secrets
 inventory.yml
 group_vars/
+ansible/group_vars/
 host_vars/
 *.secret.yml
 .env
+.env.*
+.env*
 /.env
 *.env
 .envrc

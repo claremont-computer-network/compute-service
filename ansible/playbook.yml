@@ -134,7 +134,9 @@
     - name: Notify GPU provisioning complete
       debug:
         msg: "NVIDIA driver and container toolkit installed. A reboot may be required before GPUs are accessible."
-      when: caas_gpu_enabled | default(false)
+      when:
+        - caas_gpu_enabled | default(false)
+        - ansible_os_family == 'Debian'
 
   handlers:
     - name: Restart Docker

@@ -49,7 +49,7 @@ class GpuRequest(BaseModel):
     # Pass "all" to expose every GPU, or a list of device IDs e.g. ["0", "1"]
     device_ids: t.Union[t.List[str], t.Literal["all"]] = "all"
     # Driver capabilities forwarded to the NVIDIA container runtime
-    capabilities: t.List[str] = Field(default=["gpu"])
+    capabilities: t.List[str] = Field(default_factory=lambda: ["gpu"])
 
 
 class ExecuteRequest(BaseModel):

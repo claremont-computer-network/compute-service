@@ -4,7 +4,8 @@
 # Tested on: NVIDIA GB10, Driver 580, CUDA 13.0
 #
 # Build on the remote machine:
-#   ./docker/scientific/build.sh <user@host> <port>
+#   ./docker/scientific/build.sh <user@host> <port> <remote-repo-dir>
+#   or: REPO_DIR=<remote-repo-dir> HOST=<user@host> ./docker/scientific/build.sh
 FROM nvcr.io/nvidia/pytorch:25.03-py3
 
 # System packages needed by some Python wheels (scipy, h5py, cvxpy)
@@ -19,10 +20,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# JAX with CUDA 12 support — install before requirements.txt to avoid
+# JAX with CUDA 13 support — install before requirements.txt to avoid
 # CUDA version conflicts with other packages that also depend on jaxlib.
 RUN pip install --no-cache-dir \
-    "jax[cuda12]" \
+    "jax[cuda13]" \
     flax \
     optax \
     orbax-checkpoint \

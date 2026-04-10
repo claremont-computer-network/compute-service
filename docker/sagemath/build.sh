@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # Build the caas-sagemath image directly on a remote machine.
 #
+# The remote repo must already be checked out on the correct branch and be
+# clean — this script does NOT run git pull so it builds exactly what is
+# on disk. Sync the remote manually before running if needed:
+#   ssh <host> "cd <repo> && git fetch && git checkout <branch> && git pull --ff-only"
+#
 # Usage (arguments take precedence over env vars):
 #   HOST=user@example.com REPO_DIR=~/path/to/repo ./docker/sagemath/build.sh
 #   ./docker/sagemath/build.sh user@example.com 2222 ~/path/to/repo
@@ -28,7 +33,6 @@ REPO_DIR="$1"
 IMAGE="$2"
 CONTEXT="$3"
 cd "$REPO_DIR"
-git pull --ff-only
 docker build \
   --progress=plain \
   -t "$IMAGE" \

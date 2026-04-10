@@ -58,9 +58,9 @@ for step in range(60):
     updates, opt_state = optimizer.update(grads, opt_state)
     x              = optax.apply_updates(x, updates)
     if step % 10 == 0:
-        print(f"step {step:3d}  x={x[0]:.6f}  loss={loss(x):.8f}")
+        print(f"step {step:3d}  x={float(x[0]):.6f}  loss={float(loss(x)):.8f}")
 
-print(f"\nconverged → x={x[0]:.6f}  (target 3.0)")
+print(f"\nconverged → x={float(x[0]):.6f}  (target 3.0)")
 ```
 
 ---

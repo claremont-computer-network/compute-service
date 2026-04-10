@@ -4,7 +4,8 @@
 # apt package which ships a pre-built ARM64 binary.
 #
 # Build on the remote machine:
-#   ./docker/sagemath/build.sh <user@host> <port>
+#   ./docker/sagemath/build.sh <user@host> <port> <remote-repo-dir>
+#   or: REPO_DIR=<remote-repo-dir> HOST=<user@host> ./docker/sagemath/build.sh
 FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive

@@ -10,8 +10,8 @@ This cookbook uses two custom ARM64 images built for the GB10:
 Build them on the remote machine once before running any cells:
 
 ```bash
-./docker/scientific/build.sh <user>@<host> 2222
-./docker/sagemath/build.sh   <user>@<host> 2222
+HOST=user@example.com REPO_DIR=~/path/to/repo ./docker/scientific/build.sh
+HOST=user@example.com REPO_DIR=~/path/to/repo ./docker/sagemath/build.sh
 ```
 
 ---

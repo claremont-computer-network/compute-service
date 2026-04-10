@@ -181,6 +181,26 @@ This is normal behaviour — the dispatcher returns the traceback as the log str
 
 ## GPU errors
 
+### `exec format error`
+
+The image was built for a different CPU architecture than the remote machine. The most common
+case: using `pytorch/pytorch` (amd64-only) on an ARM64 host.
+
+Check the remote machine's architecture:
+
+```python
+from caas import CaasClient
+import os
+
+with CaasClient(host=os.environ["CAAS_HOST"], api_key=os.environ.get("DISPATCHER_API_KEY")) as c:
+    result = c.execute(image="python:3.12-slim", cmd=["uname", "-m"], detach=False)
+    print(result["logs"].strip())   # aarch64 = ARM64, x86_64 = amd64
+```
+
+If the host is `aarch64`, you need an ARM64-compatible image. See the
+[ARM64 section in the GPU cookbook](../cookbooks/gpu-workload.md#arm64-aarch64-machines) for
+options.
+
 ### `RuntimeError: No CUDA GPUs are available`
 
 The container started but couldn't see the GPU:

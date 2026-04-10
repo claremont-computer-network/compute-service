@@ -13,3 +13,11 @@ caas_data_opts: defaults,_netdev
 
 # User that should be added to the docker group (so the dispatcher can manage Docker)
 caas_user: ubuntu
+
+# Set to true on machines that have an NVIDIA GPU and should run GPU workloads.
+# When true, the playbook will install the NVIDIA driver and container toolkit.
+caas_gpu_enabled: false
+
+# The NVIDIA driver branch to install (e.g. 550, 535).
+# Only used when caas_gpu_enabled is true.
+caas_nvidia_driver_branch: "550"

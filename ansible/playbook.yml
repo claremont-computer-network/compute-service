@@ -75,3 +75,55 @@
     - name: Notify about successful provisioning
       debug:
         msg: "Compute-service provisioning tasks completed. Ensure any machine-specific tuning is handled in host_vars or group_vars."
+
+    # ── GPU support (only runs when caas_gpu_enabled: true) ──────────────────
+
+    - name: Install NVIDIA driver (Ubuntu)
+      apt:
+        name: "nvidia-driver-{{ caas_nvidia_driver_branch }}"
+        state: present
+        update_cache: yes
+      when:
+        - caas_gpu_enabled | default(false)
+        - ansible_os_family == 'Debian'
+
+    - name: Add NVIDIA container toolkit GPG key
+      apt_key:
+        url: https://nvidia.github.io/libnvidia-container/gpgkey
+        state: present
+      when: caas_gpu_enabled | default(false)
+
+    - name: Add NVIDIA container toolkit repository
+      apt_repository:
+        repo: >
+          deb https://nvidia.github.io/libnvidia-container/stable/deb/$(ARCH) /
+        state: present
+        filename: nvidia-container-toolkit
+      when:
+        - caas_gpu_enabled | default(false)
+        - ansible_os_family == 'Debian'
+
+    - name: Install nvidia-container-toolkit
+      apt:
+        name: nvidia-container-toolkit
+        state: present
+        update_cache: yes
+      when:
+        - caas_gpu_enabled | default(false)
+        - ansible_os_family == 'Debian'
+
+    - name: Configure Docker to use NVIDIA runtime
+      command: nvidia-ctk runtime configure --runtime=docker
+      when: caas_gpu_enabled | default(false)
+      notify: Restart Docker
+
+    - name: Notify GPU provisioning complete
+      debug:
+        msg: "NVIDIA driver and container toolkit installed. A reboot may be required before GPUs are accessible."
+      when: caas_gpu_enabled | default(false)
+
+  handlers:
+    - name: Restart Docker
+      service:
+        name: docker
+        state: restarted

@@ -228,19 +228,41 @@ with CaasClient(host=os.environ["CAAS_HOST"], api_key=os.environ.get("DISPATCHER
     print(result["logs"].strip())   # aarch64 = ARM64, x86_64 = amd64
 ```
 
-**Option A: Build your own ARM64 PyTorch image**
+### NVIDIA Grace Blackwell (GB10) and Grace Hopper (GH200)
 
-NVIDIA publishes `l4t-pytorch` (Linux for Tegra) images for Jetson and other ARM64+GPU boards:
+Grace Blackwell and Grace Hopper are ARM64+GPU SoCs — the CPU is an NVIDIA Grace (ARM) core,
+so amd64 images will never work. Use NVIDIA's official NGC containers, which are built
+natively for these chips:
 
-```dockerfile
-# Works on Jetson / aarch64 with NVIDIA GPU
-FROM nvcr.io/nvidia/l4t-pytorch:r35.2.1-pth2.0-py3
+```python
+%%dispatch --image nvcr.io/nvidia/pytorch:25.03-py3 --gpu all
+import torch
 
-CMD ["python3"]
+print("arch         :", torch.version.cuda)
+print("CUDA avail   :", torch.cuda.is_available())
+print("device       :", torch.cuda.get_device_name(0))
 ```
 
-For cloud ARM64 instances with discrete NVIDIA GPUs (e.g. AWS Graviton + T4G), PyTorch
-publishes nightly wheels with ARM64 support:
+The `nvcr.io/nvidia/pytorch` images are large (~20 GB) but include CUDA, cuDNN, NCCL, and
+PyTorch pre-built against the exact driver on the host. Pull once on the remote machine to
+avoid timeout on first use:
+
+```bash
+docker pull nvcr.io/nvidia/pytorch:25.03-py3
+```
+
+Tags follow the pattern `YY.MM-py3`. Check
+[NGC](https://catalog.ngc.nvidia.com/orgs/nvidia/containers/pytorch) for the latest.
+
+!!! tip "Match the CUDA version"
+    Run `nvidia-smi` to find the CUDA version reported on your host (e.g. `13.0`), then pick
+    an NGC tag whose release notes list a compatible CUDA toolkit. The NGC containers ship
+    their own CUDA toolkit so the host only needs a recent enough driver.
+
+### Other ARM64 machines (Jetson, cloud ARM instances)
+
+For Jetson boards, use `nvcr.io/nvidia/l4t-pytorch`. For generic ARM64 cloud instances with
+discrete NVIDIA GPUs, build a custom image using PyTorch's ARM64 nightly wheels:
 
 ```dockerfile
 FROM arm64v8/python:3.12-slim
@@ -248,24 +270,4 @@ FROM arm64v8/python:3.12-slim
 RUN pip install --pre torch --index-url https://download.pytorch.org/whl/nightly/cu121
 
 CMD ["python3"]
-```
-
-Build and push this image from an ARM64 machine (or use `--platform linux/arm64` on an amd64
-builder), then use it in `%%dispatch`.
-
-**Option B: Use a plain Python image for non-GPU cells**
-
-If you only need GPU for specific cells and the rest of your work is CPU-bound, use
-`python:3.12-slim` for regular cells and only switch to a GPU image when needed:
-
-```python
-%%dispatch --image python:3.12-slim
-import platform
-print(platform.machine())   # aarch64
-```
-
-```python
-%%dispatch --image your-arm64-pytorch-image:latest --gpu all
-import torch
-print(torch.cuda.is_available())
 ```

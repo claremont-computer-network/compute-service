@@ -184,7 +184,8 @@ This is normal behaviour — the dispatcher returns the traceback as the log str
 ### `exec format error`
 
 The image was built for a different CPU architecture than the remote machine. The most common
-case: using `pytorch/pytorch` (amd64-only) on an ARM64 host.
+case: using `pytorch/pytorch` (amd64-only) on an ARM64 host such as an NVIDIA Grace Blackwell
+(GB10), Grace Hopper (GH200), or Jetson board.
 
 Check the remote machine's architecture:
 
@@ -197,9 +198,16 @@ with CaasClient(host=os.environ["CAAS_HOST"], api_key=os.environ.get("DISPATCHER
     print(result["logs"].strip())   # aarch64 = ARM64, x86_64 = amd64
 ```
 
-If the host is `aarch64`, you need an ARM64-compatible image. See the
-[ARM64 section in the GPU cookbook](../cookbooks/gpu-workload.md#arm64-aarch64-machines) for
-options.
+If the host is `aarch64`, use NVIDIA's NGC PyTorch container instead:
+
+```python
+%%dispatch --image nvcr.io/nvidia/pytorch:25.03-py3 --gpu all
+import torch
+print(torch.cuda.is_available())
+```
+
+See the [ARM64 section in the GPU cookbook](../cookbooks/gpu-workload.md#arm64-aarch64-machines)
+for full details and image selection guidance.
 
 ### `RuntimeError: No CUDA GPUs are available`
 

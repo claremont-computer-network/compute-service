@@ -58,7 +58,14 @@ print(f"std   : {C.std():.4f}")
 
 ## NumPy matmul — custom image (faster)
 
-Assuming you've built and pushed an image with NumPy pre-installed (see [Custom Images](custom-image.md)):
+If you've built and pushed a NumPy image (see [Custom Images](custom-image.md)), substitute
+your actual image name. The examples below show the pattern — replace
+`ghcr.io/yourorg/caas-numpy:latest` with whatever you pushed:
+
+```python
+# Replace this with your actual image before running
+NUMPY_IMAGE = "ghcr.io/yourorg/caas-numpy:latest"
+```
 
 ```python
 %%dispatch --image ghcr.io/yourorg/caas-numpy:latest
@@ -73,12 +80,23 @@ print(f"C[0, :4] = {C[0, :4]}")
 
 No pip install — the container starts and runs immediately.
 
+!!! warning "Placeholder image name"
+    `ghcr.io/yourorg/caas-numpy:latest` is not a real image. Copy the Dockerfile from the
+    [Custom Images](custom-image.md) cookbook, build it, push it, then substitute your image
+    name in the `--image` flag. If you don't have an image yet, use the pip-install approach
+    in the section above — it works out of the box.
+
 ---
 
 ## SVD decomposition
 
+Works immediately with the pip-install approach:
+
 ```python
-%%dispatch --image ghcr.io/yourorg/caas-numpy:latest
+%%dispatch
+import subprocess, sys
+subprocess.check_call([sys.executable, "-m", "pip", "install", "numpy", "-q"])
+
 import numpy as np
 
 rng = np.random.default_rng(0)
@@ -127,7 +145,10 @@ print(f"x[-1]  = {x[-1]:.6f}")
 To measure wall time on the remote machine (not your network round-trip), use `time` inside the cell:
 
 ```python
-%%dispatch --image ghcr.io/yourorg/caas-numpy:latest
+%%dispatch
+import subprocess, sys
+subprocess.check_call([sys.executable, "-m", "pip", "install", "numpy", "-q"])
+
 import numpy as np, time
 
 sizes = [256, 512, 1024, 2048]

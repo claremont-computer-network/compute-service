@@ -45,12 +45,22 @@ class VolumeSpec(BaseModel):
     mode: str = Field("rw", description="Mount mode: rw or ro")
 
 
+class GpuRequest(BaseModel):
+    # Pass "all" to expose every GPU, or a list of device IDs e.g. ["0", "1"]
+    device_ids: t.Union[t.List[str], t.Literal["all"]] = "all"
+    # Driver capabilities forwarded to the NVIDIA container runtime
+    capabilities: t.List[str] = Field(default_factory=lambda: ["gpu"])
+
+
 class ExecuteRequest(BaseModel):
     image: str
     cmd: t.Union[str, t.List[str], None] = None
     env: t.Optional[t.Dict[str, str]] = None
     volumes: t.Optional[t.List[VolumeSpec]] = None
     detach: bool = True
+    # When set, the job is given access to the specified GPUs via the
+    # NVIDIA container runtime.  Requires nvidia-container-toolkit on the host.
+    gpu: t.Optional[GpuRequest] = None
 
 
 def get_api_key(x_api_key: t.Optional[str] = Header(None)):
@@ -80,34 +90,61 @@ def execute(req: ExecuteRequest, authorized: bool = Depends(get_api_key)):
         if req.volumes:
             volumes = _validate_volumes(req.volumes)
 
+        # Build NVIDIA device_requests if GPU access is requested.
+        # count and device_ids are mutually exclusive per the Docker Engine API:
+        #   - "all" GPUs → count=-1, no device_ids
+        #   - specific IDs → device_ids only, no count
+        device_requests = None
+        if req.gpu is not None:
+            if req.gpu.device_ids == "all":
+                device_requests = [
+                    docker.types.DeviceRequest(
+                        count=-1,
+                        capabilities=[req.gpu.capabilities],
+                    )
+                ]
+            else:
+                if not req.gpu.device_ids:
+                    raise HTTPException(
+                        status_code=422,
+                        detail="gpu.device_ids must be a non-empty list or 'all'",
+                    )
+                device_requests = [
+                    docker.types.DeviceRequest(
+                        device_ids=req.gpu.device_ids,
+                        capabilities=[req.gpu.capabilities],
+                    )
+                ]
+
         # ensure the image is available (pull if needed)
         try:
             client.images.get(req.image)
         except docker.errors.ImageNotFound:
             client.images.pull(req.image)
 
+        run_kwargs = dict(
+            command=req.cmd,
+            environment=req.env,
+            volumes=volumes,
+            stdout=True,
+            stderr=True,
+            device_requests=device_requests,
+        )
+
         if req.detach:
             container = client.containers.run(
                 req.image,
-                command=req.cmd,
-                environment=req.env,
-                volumes=volumes,
                 detach=True,
-                stdout=True,
-                stderr=True,
+                **run_kwargs,
             )
             return JSONResponse({"container_id": container.id, "status": "running"})
         else:
             # Blocking run – wait for completion and return logs inline
             output = client.containers.run(
                 req.image,
-                command=req.cmd,
-                environment=req.env,
-                volumes=volumes,
                 detach=False,
-                stdout=True,
-                stderr=True,
                 remove=True,
+                **run_kwargs,
             )
             return JSONResponse({
                 "container_id": None,

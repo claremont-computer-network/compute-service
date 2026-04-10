@@ -20,7 +20,15 @@ ALLOWED_HOST_DIRS = [p for p in os.getenv("ALLOWED_HOST_DIRS", "").split(",") if
 # Controls whether ipc_mode=host is permitted (Docker shares host IPC namespace).
 ALLOW_IPC_HOST = os.getenv("ALLOW_IPC_HOST", "false").lower() == "true"
 # Maximum shared-memory segment size (in MiB) that callers may request.
-MAX_SHM_SIZE_MB = int(os.getenv("MAX_SHM_SIZE_MB", "8192"))
+_raw_max_shm = os.getenv("MAX_SHM_SIZE_MB", "8192")
+try:
+    MAX_SHM_SIZE_MB = int(_raw_max_shm)
+except ValueError:
+    logger.warning(
+        "MAX_SHM_SIZE_MB=%r is not a valid integer – falling back to 8192 MiB.",
+        _raw_max_shm,
+    )
+    MAX_SHM_SIZE_MB = 8192
 
 
 @asynccontextmanager
@@ -131,7 +139,12 @@ def _validate_shm_ipc(shm_size: t.Optional[str], ipc_mode: t.Optional[str]) -> N
             )
     if shm_size is not None:
         raw = shm_size.strip().lower()
-        suffix = raw[-1] if raw and raw[-1] in _SHM_SUFFIXES else "b"
+        if not raw:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot parse shm_size: {shm_size!r}. Expected a value like '512m' or '2g'.",
+            )
+        suffix = raw[-1] if raw[-1] in _SHM_SUFFIXES else "b"
         number_part = raw[:-1] if raw[-1] in _SHM_SUFFIXES else raw
         try:
             size_bytes = float(number_part) * _SHM_SUFFIXES[suffix]
@@ -190,6 +203,10 @@ def execute(req: ExecuteRequest, authorized: bool = Depends(get_api_key)):
         if req.gpu is not None:
             device_requests = _build_device_requests(req.gpu)
 
+        # Validate shm_size/ipc_mode policy before doing any Docker work so
+        # invalid requests are rejected cheaply without triggering image pulls.
+        _validate_shm_ipc(req.shm_size, req.ipc_mode)
+
         # ensure the image is available (pull if needed)
         try:
             client.images.get(req.image)
@@ -204,7 +221,6 @@ def execute(req: ExecuteRequest, authorized: bool = Depends(get_api_key)):
             stderr=True,
             device_requests=device_requests,
         )
-        _validate_shm_ipc(req.shm_size, req.ipc_mode)
         if req.shm_size:
             run_kwargs["shm_size"] = req.shm_size
         if req.ipc_mode:
@@ -263,6 +279,10 @@ def execute_cell(req: CellRequest, authorized: bool = Depends(get_api_key)):
         if req.gpu is not None:
             device_requests = _build_device_requests(req.gpu)
 
+        # Validate shm_size/ipc_mode policy before doing any Docker work so
+        # invalid requests are rejected cheaply without triggering image pulls.
+        _validate_shm_ipc(req.shm_size, req.ipc_mode)
+
         try:
             client.images.get(req.image)
         except docker.errors.ImageNotFound:
@@ -278,7 +298,6 @@ def execute_cell(req: CellRequest, authorized: bool = Depends(get_api_key)):
             detach=False,
             remove=True,
         )
-        _validate_shm_ipc(req.shm_size, req.ipc_mode)
         if req.shm_size:
             run_cell_kwargs["shm_size"] = req.shm_size
         if req.ipc_mode:

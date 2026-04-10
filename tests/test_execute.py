@@ -272,3 +272,18 @@ def test_execute_ipc_mode_unsupported_value_rejected(api_client, mock_docker_cli
     resp = api_client.post(EXEC_URL, json={"image": "alpine:3.18", "ipc_mode": "shareable"})
     assert resp.status_code == 400
     assert "Unsupported" in resp.json()["detail"]
+
+
+def test_execute_shm_size_empty_string_rejected(api_client, mock_docker_client):
+    """An empty/whitespace shm_size string returns 400, not a 500 IndexError."""
+    resp = api_client.post(EXEC_URL, json={"image": "alpine:3.18", "shm_size": "   "})
+    assert resp.status_code == 400
+    assert "parse" in resp.json()["detail"].lower()
+
+
+def test_execute_validation_precedes_image_pull(api_client, mock_docker_client):
+    """Invalid shm_size must be rejected before any image pull is attempted."""
+    mock_docker_client.images.get.side_effect = docker.errors.ImageNotFound("never")
+    resp = api_client.post(EXEC_URL, json={"image": "alpine:3.18", "shm_size": "   "})
+    assert resp.status_code == 400
+    mock_docker_client.images.pull.assert_not_called()

@@ -44,13 +44,18 @@ class CaasClient:
             api_key:     Value for the X-API-Key header (optional).
             http_client: Inject a custom httpx.Client (e.g. for tests).
                          When provided, the caller is responsible for closing it.
-            timeout:     Read timeout in seconds for blocking requests.
-                         Ignored when http_client is supplied.
+            timeout:     Read timeout in seconds applied to blocking requests.
+                         Connect / write / pool timeouts are left at httpx
+                         defaults (5 s).  Ignored when http_client is supplied.
                          Default: 60 s.  Increase for long-running jobs.
         """
         self._base = host.rstrip("/")
         self._api_key = api_key
-        self._http = http_client or httpx.Client(timeout=timeout)
+        # Only the read phase needs a long timeout — jobs block until the
+        # container exits.  Connect/write/pool keep httpx's 5 s defaults.
+        self._http = http_client or httpx.Client(
+            timeout=httpx.Timeout(5.0, read=timeout)
+        )
         # track whether we own the client so we know whether to close it
         self._owns_http = http_client is None
 
@@ -98,9 +103,8 @@ class CaasClient:
             )
             raise CaasTimeoutError(
                 f"The dispatcher did not respond within {timeout_val}s.\n"
-                f"The job may still be running on the remote.\n"
-                f"• For long jobs use detach=True and poll logs().\n"
-                f"• Or increase the timeout: CaasClient(host=..., timeout=300)"
+                f"• Increase the timeout: CaasClient(host=..., timeout=300)\n"
+                f"• Or retry the request if appropriate for the operation"
             ) from exc
         return resp
 
@@ -183,8 +187,15 @@ class CaasClient:
         url = f"{self._base}/v1/logs/{container_id}"
         params = {"follow": "true"} if follow else {}
         if follow:
-            with self._http.stream("GET", url, params=params, headers=self._headers()) as resp:
-                self._check(resp)
-                return "".join(resp.iter_text())
+            try:
+                with self._http.stream("GET", url, params=params, headers=self._headers()) as resp:
+                    self._check(resp)
+                    return "".join(resp.iter_text())
+            except httpx.ReadTimeout as exc:
+                raise CaasTimeoutError(
+                    "Timed out while streaming logs from the dispatcher.\n"
+                    "• Increase the timeout: CaasClient(host=..., timeout=300)\n"
+                    "• Or retry the request if appropriate for the operation"
+                ) from exc
         resp = self._call("GET", url, params=params, headers=self._headers())
         return self._check(resp).json()["logs"]

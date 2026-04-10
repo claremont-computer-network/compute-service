@@ -242,15 +242,20 @@ def test_client_context_manager(mock_transport):
 # Timeout handling
 # ---------------------------------------------------------------------------
 
-def test_timeout_constructor_sets_httpx_timeout():
-    """CaasClient(timeout=N) passes N to the underlying httpx.Client."""
+def test_timeout_constructor_sets_httpx_read_timeout():
+    """CaasClient(timeout=N) sets only the read phase of httpx.Timeout, not all phases."""
     from caas.client import CaasClient
     from unittest.mock import patch, MagicMock
 
     inner = MagicMock(spec=httpx.Client)
     with patch("httpx.Client", return_value=inner) as mock_cls:
         CaasClient(host=BASE_URL, timeout=300.0)
-    mock_cls.assert_called_once_with(timeout=300.0)
+    _, kwargs = mock_cls.call_args
+    t = kwargs["timeout"]
+    assert isinstance(t, httpx.Timeout)
+    assert t.read == 300.0
+    # connect / write / pool should keep the 5 s default
+    assert t.connect == 5.0
 
 
 def test_read_timeout_raises_caas_timeout_error(mock_transport):

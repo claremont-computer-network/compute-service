@@ -34,7 +34,15 @@ class CaasClient:
 
     def _check(self, resp: httpx.Response) -> httpx.Response:
         if resp.is_error:
-            detail = resp.json().get("detail", resp.text) if resp.content else resp.text
+            detail = resp.text
+            if resp.content:
+                try:
+                    payload = resp.json()
+                except ValueError:
+                    pass
+                else:
+                    if isinstance(payload, dict):
+                        detail = payload.get("detail", resp.text)
             raise CaasError(detail)
         return resp
 

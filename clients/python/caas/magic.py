@@ -23,8 +23,9 @@ from __future__ import annotations
 
 import os
 import argparse
+import shlex
 import typing as t
-from caas.client import CaasClient, CaasError
+from caas.client import CaasClient
 
 
 class CaasMagicError(Exception):
@@ -59,7 +60,7 @@ def _parse_line(line: str) -> argparse.Namespace:
     parser.add_argument("--gpu",   default=None,
                         help="'all' or comma-separated device IDs e.g. 0,1")
     # unknown args are silently ignored so custom flags don't break the magic
-    ns, _ = parser.parse_known_args(line.split())
+    ns, _ = parser.parse_known_args(shlex.split(line))
     return ns
 
 

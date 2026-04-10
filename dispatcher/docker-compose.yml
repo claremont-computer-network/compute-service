@@ -14,4 +14,9 @@ services:
       - ALLOWED_HOST_DIRS=${ALLOWED_HOST_DIRS:-/mnt,/data}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+    # Run as root so the dispatcher can reach the Docker socket.
+    # The socket is owned by root:docker on the host; the caas user inside
+    # the container is not in that group.  Restricting to non-root requires
+    # either matching the host docker GID at build time or a group_add entry.
+    user: root
     restart: unless-stopped

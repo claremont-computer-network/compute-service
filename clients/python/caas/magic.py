@@ -25,7 +25,7 @@ import os
 import argparse
 import shlex
 import typing as t
-from caas.client import CaasClient, CaasError
+from caas.client import CaasClient, CaasError, CaasTimeoutError, DEFAULT_TIMEOUT
 
 
 class CaasMagicError(Exception):
@@ -50,8 +50,8 @@ def _get_ipython():
         return None
 
 
-def _make_client() -> CaasClient:
-    return CaasClient(host=_config["host"], api_key=_config["api_key"])
+def _make_client(timeout: float = DEFAULT_TIMEOUT) -> CaasClient:
+    return CaasClient(host=_config["host"], api_key=_config["api_key"], timeout=timeout)
 
 
 def _parse_line(line: str) -> argparse.Namespace:
@@ -59,6 +59,13 @@ def _parse_line(line: str) -> argparse.Namespace:
     parser.add_argument("--image", default=None)
     parser.add_argument("--gpu",   default=None,
                         help="'all' or comma-separated device IDs e.g. 0,1")
+    parser.add_argument("--timeout", type=float, default=None,
+                        help=f"Read timeout in seconds (default: {DEFAULT_TIMEOUT}s). "
+                             "Increase for long-running jobs.")
+    parser.add_argument("--shm-size", dest="shm_size", default=None,
+                        help="Shared memory size, e.g. '1g'. Recommended for PyTorch DataLoader.")
+    parser.add_argument("--ipc", dest="ipc_mode", default=None,
+                        help="IPC mode, e.g. 'host'. Gives unlimited shared memory to PyTorch workers.")
     # unknown args are silently ignored so custom flags don't break the magic
     ns, _ = parser.parse_known_args(shlex.split(line))
     return ns
@@ -95,10 +102,19 @@ def _dispatch_magic(line: str, cell: str) -> None:
         )
 
     gpu = _build_gpu(args.gpu) if args.gpu else _config.get("default_gpu")
+    timeout = args.timeout if args.timeout is not None else DEFAULT_TIMEOUT
 
-    client = _make_client()
+    client = _make_client(timeout=timeout)
     try:
-        logs = client.execute_cell(code=cell, image=image, gpu=gpu)
+        logs = client.execute_cell(
+            code=cell,
+            image=image,
+            gpu=gpu,
+            shm_size=args.shm_size,
+            ipc_mode=args.ipc_mode,
+        )
+    except CaasTimeoutError as exc:
+        raise CaasMagicError(str(exc)) from exc
     except CaasError as exc:
         raise CaasMagicError(str(exc)) from exc
     print(logs, end="")

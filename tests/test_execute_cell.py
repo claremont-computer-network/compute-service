@@ -117,3 +117,70 @@ def test_cell_execute_missing_code_returns_422(api_client, mock_docker_client):
     """Omitting code returns a validation error."""
     resp = api_client.post(CELL_URL, json={"image": "python:3.11-slim"})
     assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# shm_size / ipc_mode validation
+# ---------------------------------------------------------------------------
+
+def test_cell_shm_size_accepted_within_limit(api_client, mock_docker_client):
+    """shm_size within the server limit is forwarded to docker."""
+    mock_docker_client.containers.run.return_value = b""
+    resp = api_client.post(CELL_URL, json={
+        "code": "pass", "image": "python:3.12", "shm_size": "256m",
+    })
+    assert resp.status_code == 200
+    kwargs = mock_docker_client.containers.run.call_args.kwargs
+    assert kwargs["shm_size"] == "256m"
+
+
+def test_cell_shm_size_exceeds_limit_rejected(api_client, mock_docker_client):
+    """shm_size above MAX_SHM_SIZE_MB is rejected with 400."""
+    import app.main as m
+    m.MAX_SHM_SIZE_MB = 512
+    resp = api_client.post(CELL_URL, json={
+        "code": "pass", "image": "python:3.12", "shm_size": "2g",
+    })
+    assert resp.status_code == 400
+    assert "exceeds" in resp.json()["detail"]
+
+
+def test_cell_ipc_mode_host_rejected_when_not_allowed(api_client, mock_docker_client):
+    """ipc_mode=host returns 400 when ALLOW_IPC_HOST is False (the default)."""
+    resp = api_client.post(CELL_URL, json={
+        "code": "pass", "image": "python:3.12", "ipc_mode": "host",
+    })
+    assert resp.status_code == 400
+    assert "ALLOW_IPC_HOST" in resp.json()["detail"]
+
+
+def test_cell_ipc_mode_host_accepted_when_allowed(api_client, mock_docker_client):
+    """ipc_mode=host is accepted when ALLOW_IPC_HOST is True."""
+    import app.main as m
+    m.ALLOW_IPC_HOST = True
+    mock_docker_client.containers.run.return_value = b""
+    resp = api_client.post(CELL_URL, json={
+        "code": "pass", "image": "python:3.12", "ipc_mode": "host",
+    })
+    assert resp.status_code == 200
+    kwargs = mock_docker_client.containers.run.call_args.kwargs
+    assert kwargs["ipc_mode"] == "host"
+
+
+def test_cell_shm_size_empty_string_rejected(api_client, mock_docker_client):
+    """An empty/whitespace shm_size string returns 400, not a 500 IndexError."""
+    resp = api_client.post(CELL_URL, json={
+        "code": "pass", "image": "python:3.12", "shm_size": "   ",
+    })
+    assert resp.status_code == 400
+    assert "parse" in resp.json()["detail"].lower()
+
+
+def test_cell_validation_precedes_image_pull(api_client, mock_docker_client):
+    """Invalid shm_size must be rejected before any image pull is attempted."""
+    mock_docker_client.images.get.side_effect = docker.errors.ImageNotFound("never")
+    resp = api_client.post(CELL_URL, json={
+        "code": "pass", "image": "python:3.12", "shm_size": "   ",
+    })
+    assert resp.status_code == 400
+    mock_docker_client.images.pull.assert_not_called()

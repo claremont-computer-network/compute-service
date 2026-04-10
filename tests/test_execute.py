@@ -218,3 +218,72 @@ def test_execute_sync_nonzero_exit_returns_200_with_logs(api_client, mock_docker
     assert body["exit_code"] == 1
     assert "something went wrong" in body["logs"]
     assert body["container_id"] is None
+
+
+# ---------------------------------------------------------------------------
+# shm_size / ipc_mode validation
+# ---------------------------------------------------------------------------
+
+def test_execute_shm_size_accepted_within_limit(api_client, mock_docker_client):
+    """shm_size within the server limit is forwarded to docker."""
+    resp = api_client.post(EXEC_URL, json={"image": "alpine:3.18", "shm_size": "512m"})
+    assert resp.status_code == 200
+    kwargs = mock_docker_client.containers.run.call_args.kwargs
+    assert kwargs["shm_size"] == "512m"
+
+
+def test_execute_shm_size_exceeds_limit_rejected(api_client, mock_docker_client):
+    """shm_size above MAX_SHM_SIZE_MB is rejected with 400."""
+    import app.main as m
+    m.MAX_SHM_SIZE_MB = 512
+    resp = api_client.post(EXEC_URL, json={"image": "alpine:3.18", "shm_size": "2g"})
+    assert resp.status_code == 400
+    assert "exceeds" in resp.json()["detail"]
+
+
+def test_execute_shm_size_unparseable_rejected(api_client, mock_docker_client):
+    """An unparseable shm_size value returns 400."""
+    resp = api_client.post(EXEC_URL, json={"image": "alpine:3.18", "shm_size": "lots"})
+    assert resp.status_code == 400
+    assert "parse" in resp.json()["detail"].lower()
+
+
+def test_execute_ipc_mode_host_rejected_when_not_allowed(api_client, mock_docker_client):
+    """ipc_mode=host returns 400 when ALLOW_IPC_HOST is False (the default)."""
+    resp = api_client.post(EXEC_URL, json={"image": "alpine:3.18", "ipc_mode": "host"})
+    assert resp.status_code == 400
+    assert "ALLOW_IPC_HOST" in resp.json()["detail"]
+
+
+def test_execute_ipc_mode_host_accepted_when_allowed(api_client, mock_docker_client):
+    """ipc_mode=host is accepted and forwarded when ALLOW_IPC_HOST is True."""
+    import app.main as m
+    m.ALLOW_IPC_HOST = True
+    resp = api_client.post(EXEC_URL, json={"image": "alpine:3.18", "ipc_mode": "host"})
+    assert resp.status_code == 200
+    kwargs = mock_docker_client.containers.run.call_args.kwargs
+    assert kwargs["ipc_mode"] == "host"
+
+
+def test_execute_ipc_mode_unsupported_value_rejected(api_client, mock_docker_client):
+    """Only 'host' is a valid ipc_mode; other values return 400."""
+    import app.main as m
+    m.ALLOW_IPC_HOST = True
+    resp = api_client.post(EXEC_URL, json={"image": "alpine:3.18", "ipc_mode": "shareable"})
+    assert resp.status_code == 400
+    assert "Unsupported" in resp.json()["detail"]
+
+
+def test_execute_shm_size_empty_string_rejected(api_client, mock_docker_client):
+    """An empty/whitespace shm_size string returns 400, not a 500 IndexError."""
+    resp = api_client.post(EXEC_URL, json={"image": "alpine:3.18", "shm_size": "   "})
+    assert resp.status_code == 400
+    assert "parse" in resp.json()["detail"].lower()
+
+
+def test_execute_validation_precedes_image_pull(api_client, mock_docker_client):
+    """Invalid shm_size must be rejected before any image pull is attempted."""
+    mock_docker_client.images.get.side_effect = docker.errors.ImageNotFound("never")
+    resp = api_client.post(EXEC_URL, json={"image": "alpine:3.18", "shm_size": "   "})
+    assert resp.status_code == 400
+    mock_docker_client.images.pull.assert_not_called()

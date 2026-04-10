@@ -154,6 +154,28 @@ def test_logs_raises_on_404(client, mock_transport):
         client.logs("gone")
 
 
+def test_logs_follow_streams_and_returns_text(mock_transport):
+    """follow=True uses httpx.stream() and concatenates the text/plain chunks."""
+    from caas.client import CaasClient
+
+    streaming_resp = httpx.Response(
+        200,
+        stream=httpx.ByteStream(b"line1\nline2\n"),
+        headers={"content-type": "text/plain"},
+    )
+    mock_transport[("GET", f"{BASE_URL}/v1/logs/abc123")] = streaming_resp
+
+    class _T(httpx.BaseTransport):
+        def handle_request(self, request):
+            key = (request.method, str(request.url).split("?")[0])
+            return mock_transport[key]
+
+    c = CaasClient(host=BASE_URL, api_key=API_KEY, http_client=httpx.Client(transport=_T()))
+    logs = c.logs("abc123", follow=True)
+    assert "line1" in logs
+    assert "line2" in logs
+
+
 # ---------------------------------------------------------------------------
 # No API key
 # ---------------------------------------------------------------------------

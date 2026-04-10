@@ -1,6 +1,6 @@
 # API Reference
 
-The dispatcher exposes a small, stable HTTP API. All endpoints accept and return JSON.
+The dispatcher exposes a small, stable HTTP API. Endpoints accept and return JSON, except `GET /v1/logs/{container_id}?follow=true` which streams a `text/plain` response.
 
 ---
 

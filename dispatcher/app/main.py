@@ -63,6 +63,16 @@ class ExecuteRequest(BaseModel):
     gpu: t.Optional[GpuRequest] = None
 
 
+class CellRequest(BaseModel):
+    """Request model for notebook cell execution via /v1/execute/cell."""
+    code: str
+    image: str
+    env: t.Optional[t.Dict[str, str]] = None
+    volumes: t.Optional[t.List[VolumeSpec]] = None
+    # Cell execution is always synchronous; detach is not supported.
+    gpu: t.Optional[GpuRequest] = None
+
+
 def get_api_key(x_api_key: t.Optional[str] = Header(None)):
     if API_KEY is None:
         # allow running in dev if not set, but warn in logs
@@ -83,6 +93,33 @@ def _validate_volumes(volumes: t.List[VolumeSpec]):
     return bindings
 
 
+def _build_device_requests(gpu: GpuRequest) -> list:
+    """Translate a GpuRequest into a Docker SDK DeviceRequest list.
+
+    count and device_ids are mutually exclusive per the Docker Engine API:
+      - "all" GPUs → count=-1, no device_ids
+      - specific IDs → device_ids only, no count
+    """
+    if gpu.device_ids == "all":
+        return [
+            docker.types.DeviceRequest(
+                count=-1,
+                capabilities=[gpu.capabilities],
+            )
+        ]
+    if not gpu.device_ids:
+        raise HTTPException(
+            status_code=422,
+            detail="gpu.device_ids must be a non-empty list or 'all'",
+        )
+    return [
+        docker.types.DeviceRequest(
+            device_ids=gpu.device_ids,
+            capabilities=[gpu.capabilities],
+        )
+    ]
+
+
 @app.post("/v1/execute")
 def execute(req: ExecuteRequest, authorized: bool = Depends(get_api_key)):
     try:
@@ -91,30 +128,9 @@ def execute(req: ExecuteRequest, authorized: bool = Depends(get_api_key)):
             volumes = _validate_volumes(req.volumes)
 
         # Build NVIDIA device_requests if GPU access is requested.
-        # count and device_ids are mutually exclusive per the Docker Engine API:
-        #   - "all" GPUs → count=-1, no device_ids
-        #   - specific IDs → device_ids only, no count
         device_requests = None
         if req.gpu is not None:
-            if req.gpu.device_ids == "all":
-                device_requests = [
-                    docker.types.DeviceRequest(
-                        count=-1,
-                        capabilities=[req.gpu.capabilities],
-                    )
-                ]
-            else:
-                if not req.gpu.device_ids:
-                    raise HTTPException(
-                        status_code=422,
-                        detail="gpu.device_ids must be a non-empty list or 'all'",
-                    )
-                device_requests = [
-                    docker.types.DeviceRequest(
-                        device_ids=req.gpu.device_ids,
-                        capabilities=[req.gpu.capabilities],
-                    )
-                ]
+            device_requests = _build_device_requests(req.gpu)
 
         # ensure the image is available (pull if needed)
         try:
@@ -151,6 +167,46 @@ def execute(req: ExecuteRequest, authorized: bool = Depends(get_api_key)):
                 "status": "exited",
                 "logs": output.decode(errors="replace"),
             })
+    except DockerException as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/v1/execute/cell")
+def execute_cell(req: CellRequest, authorized: bool = Depends(get_api_key)):
+    """Run a notebook cell as `python -c <code>` and return its output.
+
+    Execution is always synchronous (detach=False, remove=True) — the response
+    is returned only after the container exits.
+    """
+    try:
+        volumes = None
+        if req.volumes:
+            volumes = _validate_volumes(req.volumes)
+
+        device_requests = None
+        if req.gpu is not None:
+            device_requests = _build_device_requests(req.gpu)
+
+        try:
+            client.images.get(req.image)
+        except docker.errors.ImageNotFound:
+            client.images.pull(req.image)
+
+        output = client.containers.run(
+            req.image,
+            command=["python", "-c", req.code],
+            environment=req.env,
+            volumes=volumes,
+            stdout=True,
+            stderr=True,
+            device_requests=device_requests,
+            detach=False,
+            remove=True,
+        )
+        return JSONResponse({
+            "status": "exited",
+            "logs": output.decode(errors="replace"),
+        })
     except DockerException as e:
         raise HTTPException(status_code=500, detail=str(e))
 

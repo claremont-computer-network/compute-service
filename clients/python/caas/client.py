@@ -77,6 +77,16 @@ class CaasClient:
             return {"X-API-Key": self._api_key}
         return {}
 
+    @staticmethod
+    def _compact(**kwargs) -> dict:
+        """Build a request payload, dropping keys whose value is None.
+
+        Adding a new optional field to execute() or execute_cell() only
+        requires adding it to the method signature and to the _compact() call
+        here — no extra ``if x is not None`` block needed.
+        """
+        return {k: v for k, v in kwargs.items() if v is not None}
+
     def _check(self, resp: httpx.Response) -> httpx.Response:
         if resp.is_error:
             detail = resp.text
@@ -128,25 +138,12 @@ class CaasClient:
         ipc_mode: t.Optional[str] = None,
     ) -> dict:
         """Submit a job. Returns the raw response dict."""
-        payload: dict = {"image": image, "detach": detach}
-        if cmd is not None:
-            payload["cmd"] = cmd
-        if env:
-            payload["env"] = env
-        if volumes:
-            payload["volumes"] = volumes
-        if gpu is not None:
-            payload["gpu"] = gpu
-        if shm_size is not None:
-            payload["shm_size"] = shm_size
-        if ipc_mode is not None:
-            payload["ipc_mode"] = ipc_mode
-        resp = self._call(
-            "POST",
-            f"{self._base}/v1/execute",
-            json=payload,
-            headers=self._headers(),
+        payload = self._compact(
+            image=image, cmd=cmd, env=env or None, volumes=volumes or None,
+            gpu=gpu, detach=detach, shm_size=shm_size, ipc_mode=ipc_mode,
         )
+        resp = self._call("POST", f"{self._base}/v1/execute",
+                          json=payload, headers=self._headers())
         return self._check(resp).json()
 
     def execute_cell(
@@ -160,23 +157,12 @@ class CaasClient:
         ipc_mode: t.Optional[str] = None,
     ) -> str:
         """Send a Python code string to /v1/execute/cell. Returns the logs."""
-        payload: dict = {"code": code, "image": image}
-        if env:
-            payload["env"] = env
-        if volumes:
-            payload["volumes"] = volumes
-        if gpu is not None:
-            payload["gpu"] = gpu
-        if shm_size is not None:
-            payload["shm_size"] = shm_size
-        if ipc_mode is not None:
-            payload["ipc_mode"] = ipc_mode
-        resp = self._call(
-            "POST",
-            f"{self._base}/v1/execute/cell",
-            json=payload,
-            headers=self._headers(),
+        payload = self._compact(
+            code=code, image=image, env=env or None, volumes=volumes or None,
+            gpu=gpu, shm_size=shm_size, ipc_mode=ipc_mode,
         )
+        resp = self._call("POST", f"{self._base}/v1/execute/cell",
+                          json=payload, headers=self._headers())
         return self._check(resp).json()["logs"]
 
     def logs(self, container_id: str, follow: bool = False) -> str:

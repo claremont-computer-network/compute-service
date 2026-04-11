@@ -64,14 +64,18 @@ class GpuRequest(BaseModel):
     capabilities: t.List[str] = Field(default_factory=lambda: ["gpu"])
 
 
-class ExecuteRequest(BaseModel):
+class ContainerOptions(BaseModel):
+    """Container runtime options shared by all execution endpoints.
+
+    Adding a new runtime option (e.g. network_mode, cpus) means adding it
+    here once.  Handlers receive it automatically via _prepare_run(); the
+    client and magic each need a one-liner addition.
+    """
     image: str
-    cmd: t.Union[str, t.List[str], None] = None
     env: t.Optional[t.Dict[str, str]] = None
     volumes: t.Optional[t.List[VolumeSpec]] = None
-    detach: bool = True
-    # When set, the job is given access to the specified GPUs via the
-    # NVIDIA container runtime.  Requires nvidia-container-toolkit on the host.
+    # GPU access via the NVIDIA container runtime.
+    # Requires nvidia-container-toolkit on the host.
     gpu: t.Optional[GpuRequest] = None
     # Shared-memory size passed to Docker (e.g. "1g", "512m").
     # NVIDIA recommends increasing this for PyTorch multi-GPU / DataLoader jobs.
@@ -81,17 +85,18 @@ class ExecuteRequest(BaseModel):
     ipc_mode: t.Optional[str] = None
 
 
-class CellRequest(BaseModel):
-    """Request model for notebook cell execution via /v1/execute/cell."""
+class ExecuteRequest(ContainerOptions):
+    """Request model for /v1/execute."""
+    cmd: t.Union[str, t.List[str], None] = None
+    detach: bool = True
+
+
+class CellRequest(ContainerOptions):
+    """Request model for /v1/execute/cell.
+
+    Cell execution is always synchronous (detach is not supported).
+    """
     code: str
-    image: str
-    env: t.Optional[t.Dict[str, str]] = None
-    volumes: t.Optional[t.List[VolumeSpec]] = None
-    # Cell execution is always synchronous; detach is not supported.
-    gpu: t.Optional[GpuRequest] = None
-    # Shared-memory / IPC settings (see ExecuteRequest for details).
-    shm_size: t.Optional[str] = None
-    ipc_mode: t.Optional[str] = None
 
 
 def get_api_key(x_api_key: t.Optional[str] = Header(None)):
@@ -191,74 +196,96 @@ def _build_device_requests(gpu: GpuRequest) -> list:
     ]
 
 
+def _container_error_response(e: ContainerError, include_stdout: bool = False) -> dict:
+    """Build the response body dict for a non-zero container exit.
+
+    Both execution endpoints return HTTP 200 on non-zero exits so callers can
+    inspect the output without catching exceptions.  The only difference is
+    whether stdout is included alongside stderr — shell commands may write to
+    either stream, while `python -c` tracebacks always go to stderr.
+
+    Adding a new execution endpoint: call this instead of repeating the
+    bytes-decoding logic.
+    """
+    stderr = e.stderr.decode(errors="replace") if isinstance(e.stderr, bytes) else (e.stderr or "")
+    stdout = ""
+    if include_stdout and hasattr(e, "stdout") and isinstance(e.stdout, bytes):
+        stdout = e.stdout.decode(errors="replace")
+    return {
+        "status": "exited",
+        "exit_code": e.exit_status,
+        "logs": stdout + stderr,
+    }
+
+
+def _prepare_run(req: ContainerOptions) -> dict:
+    """Validate a request and return Docker run kwargs ready for containers.run().
+
+    Handles the pipeline that is identical for every execution endpoint:
+      1. Validate and resolve volume bind-mounts
+      2. Build NVIDIA DeviceRequest objects
+      3. Enforce shm_size / ipc_mode server policy
+      4. Pull the image if it is not present locally
+      5. Assemble the kwargs dict
+
+    The caller is responsible for setting `command` on the returned dict
+    before passing it to containers.run().
+    """
+    volumes = _validate_volumes(req.volumes) if req.volumes else None
+
+    device_requests = None
+    if req.gpu is not None:
+        device_requests = _build_device_requests(req.gpu)
+
+    _validate_shm_ipc(req.shm_size, req.ipc_mode)
+
+    try:
+        client.images.get(req.image)
+    except docker.errors.ImageNotFound:
+        client.images.pull(req.image)
+
+    kwargs: dict = dict(
+        environment=req.env,
+        volumes=volumes,
+        stdout=True,
+        stderr=True,
+        device_requests=device_requests,
+    )
+    if req.shm_size:
+        kwargs["shm_size"] = req.shm_size
+    if req.ipc_mode:
+        kwargs["ipc_mode"] = req.ipc_mode
+    return kwargs
+
+
 @app.post("/v1/execute")
 def execute(req: ExecuteRequest, authorized: bool = Depends(get_api_key)):
     try:
-        volumes = None
-        if req.volumes:
-            volumes = _validate_volumes(req.volumes)
-
-        # Build NVIDIA device_requests if GPU access is requested.
-        device_requests = None
-        if req.gpu is not None:
-            device_requests = _build_device_requests(req.gpu)
-
-        # Validate shm_size/ipc_mode policy before doing any Docker work so
-        # invalid requests are rejected cheaply without triggering image pulls.
-        _validate_shm_ipc(req.shm_size, req.ipc_mode)
-
-        # ensure the image is available (pull if needed)
-        try:
-            client.images.get(req.image)
-        except docker.errors.ImageNotFound:
-            client.images.pull(req.image)
-
-        run_kwargs = dict(
-            command=req.cmd,
-            environment=req.env,
-            volumes=volumes,
-            stdout=True,
-            stderr=True,
-            device_requests=device_requests,
-        )
-        if req.shm_size:
-            run_kwargs["shm_size"] = req.shm_size
-        if req.ipc_mode:
-            run_kwargs["ipc_mode"] = req.ipc_mode
+        run_kwargs = _prepare_run(req)
+        run_kwargs["command"] = req.cmd
 
         if req.detach:
-            container = client.containers.run(
-                req.image,
-                detach=True,
-                **run_kwargs,
-            )
+            run_kwargs["detach"] = True
+            container = client.containers.run(req.image, **run_kwargs)
             return JSONResponse({"container_id": container.id, "status": "running"})
-        else:
-            # Blocking run – wait for completion and return logs inline
-            try:
-                output = client.containers.run(
-                    req.image,
-                    detach=False,
-                    remove=True,
-                    **run_kwargs,
-                )
-                return JSONResponse({
-                    "container_id": None,
-                    "status": "exited",
-                    "exit_code": 0,
-                    "logs": output.decode(errors="replace"),
-                })
-            except ContainerError as e:
-                # Non-zero exit — return logs inline rather than a 500 so the
-                # caller can inspect the output.
-                stderr = e.stderr.decode(errors="replace") if isinstance(e.stderr, bytes) else (e.stderr or "")
-                stdout = e.stdout.decode(errors="replace") if hasattr(e, "stdout") and isinstance(e.stdout, bytes) else ""
-                return JSONResponse({
-                    "container_id": None,
-                    "status": "exited",
-                    "exit_code": e.exit_status,
-                    "logs": stdout + stderr,
-                })
+
+        # Blocking run — wait for completion and return logs inline.
+        run_kwargs["detach"] = False
+        run_kwargs["remove"] = True
+        try:
+            output = client.containers.run(req.image, **run_kwargs)
+            return JSONResponse({
+                "container_id": None,
+                "status": "exited",
+                "exit_code": 0,
+                "logs": output.decode(errors="replace"),
+            })
+        except ContainerError as e:
+            # Non-zero exit — return logs inline rather than a 500 so the
+            # caller can inspect the output.
+            body = _container_error_response(e, include_stdout=True)
+            body["container_id"] = None
+            return JSONResponse(body)
     except DockerException as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -271,39 +298,12 @@ def execute_cell(req: CellRequest, authorized: bool = Depends(get_api_key)):
     is returned only after the container exits.
     """
     try:
-        volumes = None
-        if req.volumes:
-            volumes = _validate_volumes(req.volumes)
+        run_kwargs = _prepare_run(req)
+        run_kwargs["command"] = ["python", "-c", req.code]
+        run_kwargs["detach"] = False
+        run_kwargs["remove"] = True
 
-        device_requests = None
-        if req.gpu is not None:
-            device_requests = _build_device_requests(req.gpu)
-
-        # Validate shm_size/ipc_mode policy before doing any Docker work so
-        # invalid requests are rejected cheaply without triggering image pulls.
-        _validate_shm_ipc(req.shm_size, req.ipc_mode)
-
-        try:
-            client.images.get(req.image)
-        except docker.errors.ImageNotFound:
-            client.images.pull(req.image)
-
-        run_cell_kwargs: dict = dict(
-            command=["python", "-c", req.code],
-            environment=req.env,
-            volumes=volumes,
-            stdout=True,
-            stderr=True,
-            device_requests=device_requests,
-            detach=False,
-            remove=True,
-        )
-        if req.shm_size:
-            run_cell_kwargs["shm_size"] = req.shm_size
-        if req.ipc_mode:
-            run_cell_kwargs["ipc_mode"] = req.ipc_mode
-
-        output = client.containers.run(req.image, **run_cell_kwargs)
+        output = client.containers.run(req.image, **run_kwargs)
         return JSONResponse({
             "status": "exited",
             "exit_code": 0,
@@ -312,12 +312,7 @@ def execute_cell(req: CellRequest, authorized: bool = Depends(get_api_key)):
     except ContainerError as e:
         # User code exited non-zero — return logs rather than a 500 so the
         # client can display the traceback inline, just like a local cell.
-        logs = e.stderr.decode(errors="replace") if isinstance(e.stderr, bytes) else (e.stderr or "")
-        return JSONResponse({
-            "status": "exited",
-            "exit_code": e.exit_status,
-            "logs": logs,
-        })
+        return JSONResponse(_container_error_response(e))
     except DockerException as e:
         raise HTTPException(status_code=500, detail=str(e))
 

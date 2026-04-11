@@ -323,23 +323,46 @@ def execute_cell(req: CellRequest, authorized: bool = Depends(get_api_key)):
 
 # ── Job registry ──────────────────────────────────────────────────────────────
 
+def _enrich_job_data(job, data: dict) -> None:
+    """Mutate a job data dict in-place with live container state.
+
+    For jobs recorded as "running", inspect the actual Docker container state:
+    - Container gone (NotFound): mark stopped in the store and in data.
+    - Container exited: update status + exit_code in both the store and data.
+    - Container still running: attach live resource stats.
+    - Docker unavailable: leave data unchanged (stale status is better than 500).
+
+    Centralised here so both GET /v1/jobs and GET /v1/jobs/{job_id} stay in sync.
+    Adding a new state transition only needs to happen in one place.
+    """
+    if job.status != "running":
+        return
+    try:
+        container = client.containers.get(job.container_id)
+        container.reload()
+        docker_status = container.status   # "running", "exited", "paused", ...
+        if docker_status == "exited":
+            exit_code = container.attrs.get("State", {}).get("ExitCode")
+            job_store.mark_stopped(job.job_id, exit_code=exit_code)
+            data["status"] = "stopped"
+            data["exit_code"] = exit_code
+        else:
+            stats = _fetch_resources(container)
+            data["resources"] = stats.model_dump() if stats else None
+    except NotFound:
+        job_store.mark_stopped(job.job_id)
+        data["status"] = "stopped"
+    except DockerException:
+        pass  # leave data as-is — stale "running" is safer than a 500
+
+
 @app.get("/v1/jobs")
 def list_jobs(authorized: bool = Depends(get_api_key)):
     """Return all known jobs with live resource stats for running containers."""
     records = []
     for job in job_store.list_all():
         data = job.model_dump(mode="json")
-        if job.status == "running":
-            try:
-                container = client.containers.get(job.container_id)
-                data["resources"] = _fetch_resources(container)
-                if data["resources"] is not None:
-                    data["resources"] = data["resources"].model_dump()
-            except NotFound:
-                job_store.mark_stopped(job.job_id)
-                data["status"] = "stopped"
-            except DockerException:
-                pass
+        _enrich_job_data(job, data)
         records.append(data)
     return JSONResponse(records)
 
@@ -351,16 +374,7 @@ def get_job(job_id: str, authorized: bool = Depends(get_api_key)):
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
     data = job.model_dump(mode="json")
-    if job.status == "running":
-        try:
-            container = client.containers.get(job.container_id)
-            stats = _fetch_resources(container)
-            data["resources"] = stats.model_dump() if stats else None
-        except NotFound:
-            job_store.mark_stopped(job.job_id)
-            data["status"] = "stopped"
-        except DockerException:
-            pass
+    _enrich_job_data(job, data)
     return JSONResponse(data)
 
 

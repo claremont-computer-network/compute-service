@@ -33,7 +33,9 @@ def make_docker_client() -> MagicMock:
     container.id = "abc123deadbeef"
     container.short_id = "abc123deadbeef"[:12]
     container.image.tags = ["alpine:3.18"]
-    container.attrs = {"Config": {"Cmd": None}}
+    container.attrs = {"Config": {"Cmd": None}, "State": {"ExitCode": 0}}
+    container.status = "running"
+    container.reload.return_value = None  # container.reload() is a no-op in tests
     container.logs.return_value = b"hello from container\n"
     # stats raises by default — _fetch_resources returns None gracefully.
     # Tests that need live stats should set container.stats.return_value explicitly.

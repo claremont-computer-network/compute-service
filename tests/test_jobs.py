@@ -289,6 +289,46 @@ def test_hydrate_skips_already_known_jobs(mock_docker_client):
 
 
 # ---------------------------------------------------------------------------
+# Exited-container state synchronisation (round-4 review)
+# ---------------------------------------------------------------------------
+
+def test_list_jobs_detects_exited_container(api_client, mock_docker_client):
+    """GET /v1/jobs marks a job stopped with the real exit_code when its container
+    has exited but the container object still exists in Docker."""
+    _submit_detach(api_client)
+    container = mock_docker_client.containers.get.return_value
+    container.status = "exited"
+    container.attrs = {"Config": {"Cmd": None}, "State": {"ExitCode": 42}}
+
+    resp = api_client.get(JOBS_URL)
+    assert resp.status_code == 200
+    job = resp.json()[0]
+    assert job["status"] == "stopped"
+    assert job["exit_code"] == 42
+
+
+def test_get_job_detects_exited_container(api_client, mock_docker_client):
+    """GET /v1/jobs/{id} marks a job stopped with the real exit_code when its
+    container has exited but the container object still exists in Docker."""
+    _submit_detach(api_client)
+    import app.main as m
+    job_id = m.job_store.list_all()[0].job_id
+
+    container = mock_docker_client.containers.get.return_value
+    container.status = "exited"
+    container.attrs = {"Config": {"Cmd": None}, "State": {"ExitCode": 1}}
+
+    resp = api_client.get(f"{JOBS_URL}/{job_id}")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "stopped"
+    assert body["exit_code"] == 1
+    # store must also be updated
+    assert m.job_store.get(job_id).status == "stopped"
+    assert m.job_store.get(job_id).exit_code == 1
+
+
+# ---------------------------------------------------------------------------
 # Fixture helpers
 # ---------------------------------------------------------------------------
 

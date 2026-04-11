@@ -340,3 +340,59 @@ def test_execute_cell_omits_shm_and_ipc_when_none(client, mock_transport):
 
     mock_transport[("POST", f"{BASE_URL}/v1/execute/cell")] = _check
     client.execute_cell(code="print('hi')", image="python:3.12")
+
+
+# ---------------------------------------------------------------------------
+# Empty container coercion (env={} and volumes=[] must not appear in payload)
+# ---------------------------------------------------------------------------
+
+def test_execute_omits_env_when_empty_dict(client, mock_transport):
+    """execute() must not include 'env' in the payload when an empty dict is passed."""
+    import json
+
+    def _check(request):
+        body = json.loads(request.content)
+        assert "env" not in body
+        return _make_response(200, {"container_id": "abc", "status": "running"})
+
+    mock_transport[("POST", f"{BASE_URL}/v1/execute")] = _check
+    client.execute(image="alpine:3.18", env={})
+
+
+def test_execute_omits_volumes_when_empty_list(client, mock_transport):
+    """execute() must not include 'volumes' in the payload when an empty list is passed."""
+    import json
+
+    def _check(request):
+        body = json.loads(request.content)
+        assert "volumes" not in body
+        return _make_response(200, {"container_id": "abc", "status": "running"})
+
+    mock_transport[("POST", f"{BASE_URL}/v1/execute")] = _check
+    client.execute(image="alpine:3.18", volumes=[])
+
+
+def test_execute_cell_omits_env_when_empty_dict(client, mock_transport):
+    """execute_cell() must not include 'env' in the payload when an empty dict is passed."""
+    import json
+
+    def _check(request):
+        body = json.loads(request.content)
+        assert "env" not in body
+        return _make_response(200, {"status": "exited", "exit_code": 0, "logs": ""})
+
+    mock_transport[("POST", f"{BASE_URL}/v1/execute/cell")] = _check
+    client.execute_cell(code="pass", image="python:3.12", env={})
+
+
+def test_execute_cell_omits_volumes_when_empty_list(client, mock_transport):
+    """execute_cell() must not include 'volumes' in the payload when an empty list is passed."""
+    import json
+
+    def _check(request):
+        body = json.loads(request.content)
+        assert "volumes" not in body
+        return _make_response(200, {"status": "exited", "exit_code": 0, "logs": ""})
+
+    mock_transport[("POST", f"{BASE_URL}/v1/execute/cell")] = _check
+    client.execute_cell(code="pass", image="python:3.12", volumes=[])

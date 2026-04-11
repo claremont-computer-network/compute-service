@@ -139,7 +139,7 @@ class CaasClient:
     ) -> dict:
         """Submit a job. Returns the raw response dict."""
         payload = self._compact(
-            image=image, cmd=cmd, env=env, volumes=volumes,
+            image=image, cmd=cmd, env=env or None, volumes=volumes or None,
             gpu=gpu, detach=detach, shm_size=shm_size, ipc_mode=ipc_mode,
         )
         resp = self._call("POST", f"{self._base}/v1/execute",
@@ -158,7 +158,7 @@ class CaasClient:
     ) -> str:
         """Send a Python code string to /v1/execute/cell. Returns the logs."""
         payload = self._compact(
-            code=code, image=image, env=env, volumes=volumes,
+            code=code, image=image, env=env or None, volumes=volumes or None,
             gpu=gpu, shm_size=shm_size, ipc_mode=ipc_mode,
         )
         resp = self._call("POST", f"{self._base}/v1/execute/cell",

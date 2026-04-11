@@ -43,7 +43,7 @@ _config: dict = {
 # Args consumed by the magic itself; the rest are forwarded verbatim to execute_cell().
 # Adding a new --flag: add to _parse_line() with dest= matching the execute_cell()
 # kwarg name. Only add to this set if the arg is NOT a container option.
-_MAGIC_META_ARGS: frozenset[str] = frozenset({"image", "gpu", "timeout"})
+_MAGIC_META_ARGS: frozenset[str] = frozenset({"image", "gpu", "timeout", "volumes"})
 
 
 def _get_ipython():
@@ -71,6 +71,10 @@ def _parse_line(line: str) -> argparse.Namespace:
                         help="Shared memory size, e.g. '1g'. Recommended for PyTorch DataLoader.")
     parser.add_argument("--ipc", dest="ipc_mode", default=None,
                         help="IPC mode, e.g. 'host'. Gives unlimited shared memory to PyTorch workers.")
+    parser.add_argument("--volume", dest="volumes", action="append", default=None,
+                        metavar="HOST:CONTAINER[:MODE]",
+                        help="Bind-mount a host path, e.g. /home/erik/nas_data:/outputs. "
+                             "May be repeated for multiple mounts.")
     # unknown args are silently ignored so custom flags don't break the magic
     ns, _ = parser.parse_known_args(shlex.split(line))
     return ns
@@ -90,6 +94,25 @@ def _build_gpu(gpu_arg: t.Optional[str]) -> t.Optional[dict]:
     return {"device_ids": ids, "capabilities": ["gpu"]}
 
 
+def _build_volumes(volume_args: t.Optional[t.List[str]]) -> t.Optional[t.List[dict]]:
+    """Parse --volume HOST:CONTAINER[:MODE] strings into VolumeSpec dicts."""
+    if not volume_args:
+        return None
+    result = []
+    for v in volume_args:
+        parts = v.split(":")
+        if len(parts) < 2:
+            raise CaasMagicError(
+                f"Invalid --volume value {v!r}. Expected HOST:CONTAINER or HOST:CONTAINER:MODE."
+            )
+        result.append({
+            "host_path": parts[0],
+            "container_path": parts[1],
+            "mode": parts[2] if len(parts) > 2 else "rw",
+        })
+    return result
+
+
 def _dispatch_magic(line: str, cell: str) -> None:
     """Core logic — separated from IPython registration so tests can call it."""
     if not _config.get("host"):
@@ -107,6 +130,7 @@ def _dispatch_magic(line: str, cell: str) -> None:
         )
 
     gpu = _build_gpu(args.gpu) if args.gpu else _config.get("default_gpu")
+    volumes = _build_volumes(args.volumes)
     timeout = args.timeout if args.timeout is not None else DEFAULT_TIMEOUT
 
     # Collect container options that map 1:1 to execute_cell() kwargs.
@@ -117,7 +141,7 @@ def _dispatch_magic(line: str, cell: str) -> None:
 
     client = _make_client(timeout=timeout)
     try:
-        logs = client.execute_cell(code=cell, image=image, gpu=gpu, **opts)
+        logs = client.execute_cell(code=cell, image=image, gpu=gpu, volumes=volumes, **opts)
     except CaasTimeoutError as exc:
         raise CaasMagicError(str(exc)) from exc
     except CaasError as exc:

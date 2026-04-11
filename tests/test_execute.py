@@ -19,6 +19,7 @@ def test_execute_minimal(api_client, mock_docker_client):
     body = resp.json()
     assert body["container_id"] == "abc123deadbeef"
     assert body["status"] == "running"
+    assert "job_id" in body
     mock_docker_client.containers.run.assert_called_once()
 
 

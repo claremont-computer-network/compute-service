@@ -8,7 +8,7 @@ and for execute() registering jobs on detach=True.
 """
 import pytest
 import docker.errors
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 EXEC_URL  = "/v1/execute"
 JOBS_URL  = "/v1/jobs"

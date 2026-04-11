@@ -270,8 +270,8 @@ def execute(req: ExecuteRequest, authorized: bool = Depends(get_api_key)):
         if req.detach:
             run_kwargs["detach"] = True
             container = client.containers.run(req.image, **run_kwargs)
-            job_store.register(container, image=req.image, cmd=req.cmd)
-            return JSONResponse({"container_id": container.id, "status": "running"})
+            record = job_store.register(container, image=req.image, cmd=req.cmd)
+            return JSONResponse({"job_id": record.job_id, "container_id": container.id, "status": "running"})
 
         # Blocking run — wait for completion and return logs inline.
         run_kwargs["detach"] = False

@@ -53,34 +53,38 @@ def _fetch_resources(container) -> t.Optional[ResourceStats]:
     except Exception:
         return None
 
-    # CPU: delta between two consecutive readings that Docker gives us in
-    # one single-shot call.
-    cpu_delta = (
-        raw["cpu_stats"]["cpu_usage"]["total_usage"]
-        - raw["precpu_stats"]["cpu_usage"]["total_usage"]
-    )
-    system_delta = (
-        raw["cpu_stats"]["system_cpu_usage"]
-        - raw["precpu_stats"]["system_cpu_usage"]
-    )
-    num_cpus = raw["cpu_stats"].get("online_cpus") or len(
-        raw["cpu_stats"]["cpu_usage"].get("percpu_usage", [1])
-    )
-    cpu_percent = (cpu_delta / system_delta * num_cpus * 100.0) if system_delta > 0 else 0.0
+    try:
+        # CPU: delta between two consecutive readings that Docker gives us in
+        # one single-shot call.
+        cpu_delta = (
+            raw["cpu_stats"]["cpu_usage"]["total_usage"]
+            - raw["precpu_stats"]["cpu_usage"]["total_usage"]
+        )
+        system_delta = (
+            raw["cpu_stats"]["system_cpu_usage"]
+            - raw["precpu_stats"]["system_cpu_usage"]
+        )
+        num_cpus = raw["cpu_stats"].get("online_cpus") or len(
+            raw["cpu_stats"]["cpu_usage"].get("percpu_usage", [1])
+        )
+        cpu_percent = (cpu_delta / system_delta * num_cpus * 100.0) if system_delta > 0 else 0.0
 
-    mem = raw.get("memory_stats", {})
-    usage = mem.get("usage", 0)
-    limit = mem.get("limit", 1)
-    mem_usage_mb = usage / (1024 ** 2)
-    mem_limit_mb = limit / (1024 ** 2)
-    mem_percent = (usage / limit * 100.0) if limit > 0 else 0.0
+        mem = raw.get("memory_stats", {})
+        usage = mem.get("usage", 0)
+        limit = mem.get("limit", 1)
+        mem_usage_mb = usage / (1024 ** 2)
+        mem_limit_mb = limit / (1024 ** 2)
+        mem_percent = (usage / limit * 100.0) if limit > 0 else 0.0
 
-    return ResourceStats(
-        cpu_percent=round(cpu_percent, 2),
-        mem_usage_mb=round(mem_usage_mb, 2),
-        mem_limit_mb=round(mem_limit_mb, 2),
-        mem_percent=round(mem_percent, 2),
-    )
+        return ResourceStats(
+            cpu_percent=round(cpu_percent, 2),
+            mem_usage_mb=round(mem_usage_mb, 2),
+            mem_limit_mb=round(mem_limit_mb, 2),
+            mem_percent=round(mem_percent, 2),
+        )
+    except (KeyError, TypeError, ZeroDivisionError) as exc:
+        logger.debug("Ignoring malformed Docker stats payload: %s", exc)
+        return None
 
 
 class JobStore:
@@ -104,10 +108,11 @@ class JobStore:
         self._jobs[record.job_id] = record
         return record
 
-    def mark_stopped(self, job_id: str, exit_code: int = 0) -> None:
+    def mark_stopped(self, job_id: str, exit_code: t.Optional[int] = None) -> None:
         if job_id in self._jobs:
             self._jobs[job_id].status = "stopped"
-            self._jobs[job_id].exit_code = exit_code
+            if exit_code is not None:
+                self._jobs[job_id].exit_code = exit_code
 
     # ── read ──────────────────────────────────────────────────────────────────
 

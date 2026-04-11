@@ -31,11 +31,22 @@ def make_docker_client() -> MagicMock:
     # containers.run returns a container stub
     container = MagicMock()
     container.id = "abc123deadbeef"
+    container.short_id = "abc123deadbeef"[:12]
+    container.image.tags = ["alpine:3.18"]
+    container.attrs = {"Config": {"Cmd": None}, "State": {"ExitCode": 0}}
+    container.status = "running"
+    container.reload.return_value = None  # container.reload() is a no-op in tests
     container.logs.return_value = b"hello from container\n"
+    # stats raises by default — _fetch_resources returns None gracefully.
+    # Tests that need live stats should set container.stats.return_value explicitly.
+    container.stats.side_effect = Exception("no stats in tests by default")
     client.containers.run.return_value = container
 
     # containers.get returns the same stub by default
     client.containers.get.return_value = container
+
+    # containers.list returns empty by default (no pre-existing containers)
+    client.containers.list.return_value = []
 
     return client
 
@@ -62,6 +73,7 @@ def mock_docker_client(monkeypatch):
         main_module.ALLOWED_HOST_DIRS = ["/mnt", "/data", "/tmp"]
         main_module.ALLOW_IPC_HOST = False
         main_module.MAX_SHM_SIZE_MB = 8192
+        main_module.job_store = type(main_module.job_store)()  # fresh store per test
 
         yield dc
 

@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 import docker
 from docker.errors import DockerException, NotFound, ContainerError
 from dotenv import load_dotenv
+from app.jobs import JobStore, _fetch_resources
 
 load_dotenv()  # optional .env
 
@@ -43,12 +44,14 @@ async def lifespan(app: FastAPI):
             "ALLOWED_HOST_DIRS is not set – volume mounts will be rejected for all "
             "requests. Set this variable to permit specific host paths."
         )
+    job_store.hydrate_from_docker(client)
     yield
 
 
 app = FastAPI(title="Compute Service Dispatcher", lifespan=lifespan)
 
 client = docker.from_env()
+job_store = JobStore()
 
 
 class VolumeSpec(BaseModel):
@@ -267,6 +270,7 @@ def execute(req: ExecuteRequest, authorized: bool = Depends(get_api_key)):
         if req.detach:
             run_kwargs["detach"] = True
             container = client.containers.run(req.image, **run_kwargs)
+            job_store.register(container, image=req.image, cmd=req.cmd)
             return JSONResponse({"container_id": container.id, "status": "running"})
 
         # Blocking run — wait for completion and return logs inline.
@@ -315,6 +319,67 @@ def execute_cell(req: CellRequest, authorized: bool = Depends(get_api_key)):
         return JSONResponse(_container_error_response(e))
     except DockerException as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Job registry ──────────────────────────────────────────────────────────────
+
+@app.get("/v1/jobs")
+def list_jobs(authorized: bool = Depends(get_api_key)):
+    """Return all known jobs with live resource stats for running containers."""
+    records = []
+    for job in job_store.list_all():
+        data = job.model_dump(mode="json")
+        if job.status == "running":
+            try:
+                container = client.containers.get(job.container_id)
+                data["resources"] = _fetch_resources(container)
+                if data["resources"] is not None:
+                    data["resources"] = data["resources"].model_dump()
+            except NotFound:
+                job_store.mark_stopped(job.job_id)
+                data["status"] = "stopped"
+            except DockerException:
+                pass
+        records.append(data)
+    return JSONResponse(records)
+
+
+@app.get("/v1/jobs/{job_id}")
+def get_job(job_id: str, authorized: bool = Depends(get_api_key)):
+    """Return a single job record with live resource stats."""
+    job = job_store.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
+    data = job.model_dump(mode="json")
+    if job.status == "running":
+        try:
+            container = client.containers.get(job.container_id)
+            stats = _fetch_resources(container)
+            data["resources"] = stats.model_dump() if stats else None
+        except NotFound:
+            job_store.mark_stopped(job.job_id)
+            data["status"] = "stopped"
+        except DockerException:
+            pass
+    return JSONResponse(data)
+
+
+@app.delete("/v1/jobs/{job_id}")
+def stop_job(job_id: str, authorized: bool = Depends(get_api_key)):
+    """Stop and remove a running container, then mark the job stopped."""
+    job = job_store.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
+    try:
+        container = client.containers.get(job.container_id)
+        container.stop()
+        container.remove()
+    except NotFound:
+        pass  # already gone — still mark it stopped
+    except DockerException as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    job_store.mark_stopped(job_id)
+    return JSONResponse({"job_id": job_id, "status": "stopped"})
 
 
 @app.get("/v1/logs/{container_id}")

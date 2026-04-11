@@ -396,3 +396,45 @@ def test_execute_cell_omits_volumes_when_empty_list(client, mock_transport):
 
     mock_transport[("POST", f"{BASE_URL}/v1/execute/cell")] = _check
     client.execute_cell(code="pass", image="python:3.12", volumes=[])
+
+
+# ---------------------------------------------------------------------------
+# Job registry methods
+# ---------------------------------------------------------------------------
+
+def test_jobs_returns_list(client, mock_transport):
+    """jobs() returns the parsed JSON list from GET /v1/jobs."""
+    mock_transport[("GET", f"{BASE_URL}/v1/jobs")] = _make_response(
+        200, [{"job_id": "abc123", "status": "running", "image": "alpine:3.18"}]
+    )
+    result = client.jobs()
+    assert isinstance(result, list)
+    assert result[0]["job_id"] == "abc123"
+
+
+def test_job_returns_single_record(client, mock_transport):
+    """job(job_id) returns the parsed JSON dict from GET /v1/jobs/{job_id}."""
+    mock_transport[("GET", f"{BASE_URL}/v1/jobs/abc123")] = _make_response(
+        200, {"job_id": "abc123", "status": "running", "image": "alpine:3.18"}
+    )
+    result = client.job("abc123")
+    assert result["job_id"] == "abc123"
+
+
+def test_stop_returns_stopped(client, mock_transport):
+    """stop(job_id) returns the dispatcher response dict."""
+    mock_transport[("DELETE", f"{BASE_URL}/v1/jobs/abc123")] = _make_response(
+        200, {"job_id": "abc123", "status": "stopped"}
+    )
+    result = client.stop("abc123")
+    assert result["status"] == "stopped"
+
+
+def test_job_raises_on_404(client, mock_transport):
+    """job() raises CaasError when the dispatcher returns 404."""
+    from caas.client import CaasError
+    mock_transport[("GET", f"{BASE_URL}/v1/jobs/gone")] = _make_response(
+        404, {"detail": "Job not found: gone"}
+    )
+    with pytest.raises(CaasError, match="not found"):
+        client.job("gone")

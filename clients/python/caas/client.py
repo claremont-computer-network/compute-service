@@ -186,3 +186,20 @@ class CaasClient:
                 ) from exc
         resp = self._call("GET", url, params=params, headers=self._headers())
         return self._check(resp).json()["logs"]
+
+    # ── job registry ──────────────────────────────────────────────────────────
+
+    def jobs(self) -> list:
+        """Return all known jobs (with live resource stats for running ones)."""
+        resp = self._call("GET", f"{self._base}/v1/jobs", headers=self._headers())
+        return self._check(resp).json()
+
+    def job(self, job_id: str) -> dict:
+        """Return a single job record by job_id (container short ID)."""
+        resp = self._call("GET", f"{self._base}/v1/jobs/{job_id}", headers=self._headers())
+        return self._check(resp).json()
+
+    def stop(self, job_id: str) -> dict:
+        """Stop and remove a running job. Returns {"job_id": ..., "status": "stopped"}."""
+        resp = self._call("DELETE", f"{self._base}/v1/jobs/{job_id}", headers=self._headers())
+        return self._check(resp).json()

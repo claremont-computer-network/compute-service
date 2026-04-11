@@ -142,3 +142,8 @@ def register_magic(ip=None) -> None:
     shell = ip or _get_ipython()
     if shell is not None:
         shell.register_magic_function(_dispatch_magic, magic_kind="cell", magic_name="dispatch")
+
+
+def load_ipython_extension(ipython) -> None:
+    """Called by %load_ext caas.magic — delegates to register_magic()."""
+    register_magic(ip=ipython)

@@ -6,14 +6,16 @@ In-memory job registry for the compute-service dispatcher.
 JobRecord is a plain Pydantic model so it serialises to JSON for free
 via FastAPI's JSONResponse — no manual dict-building needed.
 
-JobStore is an in-memory dict keyed by job_id (= container short ID).
-State is intentionally ephemeral: the store is rebuilt from docker ps
-on each startup via hydrate_from_docker(), so a service restart does
-not lose visibility of already-running containers.
+JobStore is a thread-safe in-memory dict keyed by full container ID
+(container.id).  The full ID has no collision risk unlike the 12-char
+short_id prefix.  State is intentionally ephemeral: the store is rebuilt
+from docker ps on each startup via hydrate_from_docker(), so a service
+restart does not lose visibility of already-running containers.
 """
 from __future__ import annotations
 
 import logging
+import threading
 import typing as t
 from datetime import datetime, timezone
 
@@ -25,15 +27,15 @@ logger = logging.getLogger("caas.jobs")
 class ResourceStats(BaseModel):
     """Live resource usage snapshot fetched from the Docker stats API."""
     cpu_percent: float
-    mem_usage_mb: float
-    mem_limit_mb: float
+    mem_usage_mib: float   # mebibytes (÷ 1024²) — matches Docker's own display
+    mem_limit_mib: float
     mem_percent: float
 
 
 class JobRecord(BaseModel):
     """Immutable identity fields plus mutable status for one dispatched job."""
-    job_id: str                                    # = container short ID
-    container_id: str                              # full 64-char ID
+    job_id: str                                    # = full container ID
+    container_id: str                              # full 64-char ID (same value, kept for API compat)
     image: str
     cmd: t.Union[str, t.List[str], None] = None
     submitted_at: datetime
@@ -72,14 +74,14 @@ def _fetch_resources(container) -> t.Optional[ResourceStats]:
         mem = raw.get("memory_stats", {})
         usage = mem.get("usage", 0)
         limit = mem.get("limit", 1)
-        mem_usage_mb = usage / (1024 ** 2)
-        mem_limit_mb = limit / (1024 ** 2)
+        mem_usage_mib = usage / (1024 ** 2)
+        mem_limit_mib = limit / (1024 ** 2)
         mem_percent = (usage / limit * 100.0) if limit > 0 else 0.0
 
         return ResourceStats(
             cpu_percent=round(cpu_percent, 2),
-            mem_usage_mb=round(mem_usage_mb, 2),
-            mem_limit_mb=round(mem_limit_mb, 2),
+            mem_usage_mib=round(mem_usage_mib, 2),
+            mem_limit_mib=round(mem_limit_mib, 2),
             mem_percent=round(mem_percent, 2),
         )
     except (KeyError, TypeError, ZeroDivisionError) as exc:
@@ -88,10 +90,19 @@ def _fetch_resources(container) -> t.Optional[ResourceStats]:
 
 
 class JobStore:
-    """Thread-unsafe in-memory store — acceptable for a single-process dispatcher."""
+    """Thread-safe in-memory store for dispatched jobs.
+
+    FastAPI runs sync endpoints in a threadpool, so concurrent requests can
+    call register()/mark_stopped()/list_all() simultaneously.  A single lock
+    around all mutations and the list snapshot is sufficient here.
+
+    Key: full container ID (container.id).  The full ID has no collision risk
+    unlike the 12-char short_id prefix.
+    """
 
     def __init__(self) -> None:
         self._jobs: dict[str, JobRecord] = {}
+        self._lock = threading.Lock()
 
     # ── write ─────────────────────────────────────────────────────────────────
 
@@ -99,28 +110,32 @@ class JobStore:
                  cmd: t.Union[str, t.List[str], None] = None) -> JobRecord:
         """Record a newly started detached container."""
         record = JobRecord(
-            job_id=container.short_id,
+            job_id=container.id,
             container_id=container.id,
             image=image,
             cmd=cmd,
             submitted_at=datetime.now(timezone.utc),
         )
-        self._jobs[record.job_id] = record
+        with self._lock:
+            self._jobs[record.job_id] = record
         return record
 
     def mark_stopped(self, job_id: str, exit_code: t.Optional[int] = None) -> None:
-        if job_id in self._jobs:
-            self._jobs[job_id].status = "stopped"
-            if exit_code is not None:
-                self._jobs[job_id].exit_code = exit_code
+        with self._lock:
+            if job_id in self._jobs:
+                self._jobs[job_id].status = "stopped"
+                if exit_code is not None:
+                    self._jobs[job_id].exit_code = exit_code
 
     # ── read ──────────────────────────────────────────────────────────────────
 
     def get(self, job_id: str) -> t.Optional[JobRecord]:
-        return self._jobs.get(job_id)
+        with self._lock:
+            return self._jobs.get(job_id)
 
     def list_all(self) -> list[JobRecord]:
-        return list(self._jobs.values())
+        with self._lock:
+            return list(self._jobs.values())
 
     # ── startup recovery ──────────────────────────────────────────────────────
 
@@ -138,16 +153,17 @@ class JobStore:
             return
 
         epoch = datetime.fromtimestamp(0, tz=timezone.utc)
-        for c in containers:
-            if c.short_id not in self._jobs:
-                record = JobRecord(
-                    job_id=c.short_id,
-                    container_id=c.id,
-                    image=c.image.tags[0] if c.image.tags else c.image.short_id,
-                    cmd=c.attrs.get("Config", {}).get("Cmd"),
-                    submitted_at=epoch,
-                )
-                self._jobs[record.job_id] = record
-                logger.debug("Hydrated job %s from docker ps", record.job_id)
+        with self._lock:
+            for c in containers:
+                if c.id not in self._jobs:
+                    record = JobRecord(
+                        job_id=c.id,
+                        container_id=c.id,
+                        image=c.image.tags[0] if c.image.tags else c.image.short_id,
+                        cmd=c.attrs.get("Config", {}).get("Cmd"),
+                        submitted_at=epoch,
+                    )
+                    self._jobs[record.job_id] = record
+                    logger.debug("Hydrated job %s from docker ps", record.job_id)
 
         logger.info("Job store hydrated: %d job(s) recovered", len(self._jobs))

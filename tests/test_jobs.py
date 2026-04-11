@@ -44,6 +44,14 @@ def test_execute_detach_job_has_correct_image(api_client, mock_docker_client):
     assert job.image == "pytorch/pytorch:latest"
 
 
+def test_execute_detach_job_id_is_full_container_id(api_client, mock_docker_client):
+    """job_id must equal the full container ID (not the short_id prefix)."""
+    import app.main as m
+    body = _submit_detach(api_client)
+    job = m.job_store.list_all()[0]
+    assert job.job_id == body["container_id"]
+
+
 def test_execute_sync_does_not_register_job(api_client, mock_docker_client):
     """Synchronous (detach=False) runs are fire-and-forget; no registry entry."""
     import app.main as m
@@ -89,7 +97,7 @@ def test_list_jobs_includes_resource_stats(api_client, mock_docker_client):
     jobs = resp.json()
     assert jobs[0]["resources"] is not None
     assert "cpu_percent" in jobs[0]["resources"]
-    assert "mem_usage_mb" in jobs[0]["resources"]
+    assert "mem_usage_mib" in jobs[0]["resources"]
 
 
 def test_list_jobs_marks_stopped_when_container_gone(api_client, mock_docker_client):
@@ -210,8 +218,8 @@ def test_hydrate_populates_store_from_running_containers(mock_docker_client):
     from app.jobs import JobStore
 
     c = MagicMock()
-    c.short_id = "pre000000000000"
-    c.id = "pre000000000000" + "0" * 50
+    c.short_id = "pre00000000"           # 12-char, matching real Docker short IDs
+    c.id = "pre00000000" + "0" * 52      # 64-char full ID
     c.image.tags = ["nginx:latest"]
     c.attrs = {"Config": {"Cmd": ["nginx", "-g", "daemon off;"]}}
 
@@ -220,8 +228,9 @@ def test_hydrate_populates_store_from_running_containers(mock_docker_client):
     store = JobStore()
     store.hydrate_from_docker(mock_docker_client)
 
-    assert store.get("pre000000000000") is not None
-    assert store.get("pre000000000000").image == "nginx:latest"
+    # store is keyed by full container ID
+    assert store.get(c.id) is not None
+    assert store.get(c.id).image == "nginx:latest"
 
 
 def test_hydrate_skips_already_known_jobs(mock_docker_client):
@@ -231,16 +240,16 @@ def test_hydrate_skips_already_known_jobs(mock_docker_client):
 
     store = JobStore()
     c = MagicMock()
-    c.short_id = "knownid0000000"
-    c.id = "knownid0000000" + "0" * 50
+    c.short_id = "knownid00000"          # 12-char
+    c.id = "knownid00000" + "0" * 52     # 64-char full ID
     c.image.tags = ["alpine:3.18"]
     c.attrs = {"Config": {"Cmd": None}}
 
-    # pre-register with a known timestamp
+    # pre-register with a known timestamp (keyed by full ID)
     known_time = datetime(2026, 1, 1, tzinfo=timezone.utc)
     from app.jobs import JobRecord
-    store._jobs["knownid0000000"] = JobRecord(
-        job_id="knownid0000000",
+    store._jobs[c.id] = JobRecord(
+        job_id=c.id,
         container_id=c.id,
         image="alpine:3.18",
         submitted_at=known_time,
@@ -250,7 +259,7 @@ def test_hydrate_skips_already_known_jobs(mock_docker_client):
     store.hydrate_from_docker(mock_docker_client)
 
     # submitted_at must not be overwritten with epoch
-    assert store.get("knownid0000000").submitted_at == known_time
+    assert store.get(c.id).submitted_at == known_time
 
 
 # ---------------------------------------------------------------------------

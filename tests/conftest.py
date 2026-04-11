@@ -73,7 +73,7 @@ def mock_docker_client(monkeypatch):
         main_module.ALLOWED_HOST_DIRS = ["/mnt", "/data", "/tmp"]
         main_module.ALLOW_IPC_HOST = False
         main_module.MAX_SHM_SIZE_MB = 8192
-        main_module.job_store._jobs.clear()  # fresh store per test
+        main_module.job_store = type(main_module.job_store)()  # fresh store per test
 
         yield dc
 

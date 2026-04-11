@@ -39,7 +39,7 @@ class JobRecord(BaseModel):
     image: str
     cmd: t.Union[str, t.List[str], None] = None
     submitted_at: datetime
-    status: str = "running"                        # running | exited | stopped
+    status: str = "running"                        # running | stopped
     exit_code: t.Optional[int] = None
     resources: t.Optional[ResourceStats] = None   # populated on GET, not at submit
 

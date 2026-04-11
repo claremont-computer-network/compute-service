@@ -335,20 +335,28 @@ def _enrich_job_data(job, data: dict) -> None:
     Centralised here so both GET /v1/jobs and GET /v1/jobs/{job_id} stay in sync.
     Adding a new state transition only needs to happen in one place.
     """
+    # Docker terminal states that are not "running" — treat all of them as stopped.
+    # "exited" is the normal case; "dead" means Docker gave up; anything else
+    # (e.g. "created", "paused", "removing") is transitional — we don't fetch
+    # stats for those either, but we only mark_stopped for confirmed terminal states.
+    _TERMINAL_STATES = {"exited", "dead"}
+
     if job.status != "running":
         return
     try:
         container = client.containers.get(job.container_id)
         container.reload()
-        docker_status = container.status   # "running", "exited", "paused", ...
-        if docker_status == "exited":
+        docker_status = container.status
+        if docker_status in _TERMINAL_STATES:
             exit_code = container.attrs.get("State", {}).get("ExitCode")
             job_store.mark_stopped(job.job_id, exit_code=exit_code)
             data["status"] = "stopped"
             data["exit_code"] = exit_code
-        else:
+        elif docker_status == "running":
             stats = _fetch_resources(container)
             data["resources"] = stats.model_dump() if stats else None
+        # else: transitional state ("created", "paused", "removing") —
+        # leave data unchanged; the next poll will catch the final state.
     except NotFound:
         job_store.mark_stopped(job.job_id)
         data["status"] = "stopped"

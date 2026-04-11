@@ -40,6 +40,11 @@ _config: dict = {
     "default_gpu": None,
 }
 
+# Args consumed by the magic itself; the rest are forwarded verbatim to execute_cell().
+# Adding a new --flag: add to _parse_line() with dest= matching the execute_cell()
+# kwarg name. Only add to this set if the arg is NOT a container option.
+_MAGIC_META_ARGS: frozenset[str] = frozenset({"image", "gpu", "timeout"})
+
 
 def _get_ipython():
     """Thin wrapper so tests can patch this without importing IPython."""
@@ -105,12 +110,10 @@ def _dispatch_magic(line: str, cell: str) -> None:
     timeout = args.timeout if args.timeout is not None else DEFAULT_TIMEOUT
 
     # Collect container options that map 1:1 to execute_cell() kwargs.
-    # Adding a new %%dispatch flag only requires adding it to _parse_line()
-    # and to this dict — the execute_cell() call below does not change.
-    opts = {k: v for k, v in {
-        "shm_size": args.shm_size,
-        "ipc_mode": args.ipc_mode,
-    }.items() if v is not None}
+    # Adding a new --flag: add to _parse_line() with a dest= matching the
+    # execute_cell() kwarg name — nothing else changes.
+    opts = {k: v for k, v in vars(args).items()
+            if k not in _MAGIC_META_ARGS and v is not None}
 
     client = _make_client(timeout=timeout)
     try:

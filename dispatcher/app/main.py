@@ -196,6 +196,28 @@ def _build_device_requests(gpu: GpuRequest) -> list:
     ]
 
 
+def _container_error_response(e: ContainerError, include_stdout: bool = False) -> dict:
+    """Build the response body dict for a non-zero container exit.
+
+    Both execution endpoints return HTTP 200 on non-zero exits so callers can
+    inspect the output without catching exceptions.  The only difference is
+    whether stdout is included alongside stderr — shell commands may write to
+    either stream, while `python -c` tracebacks always go to stderr.
+
+    Adding a new execution endpoint: call this instead of repeating the
+    bytes-decoding logic.
+    """
+    stderr = e.stderr.decode(errors="replace") if isinstance(e.stderr, bytes) else (e.stderr or "")
+    stdout = ""
+    if include_stdout and hasattr(e, "stdout") and isinstance(e.stdout, bytes):
+        stdout = e.stdout.decode(errors="replace")
+    return {
+        "status": "exited",
+        "exit_code": e.exit_status,
+        "logs": stdout + stderr,
+    }
+
+
 def _prepare_run(req: ContainerOptions) -> dict:
     """Validate a request and return Docker run kwargs ready for containers.run().
 
@@ -206,8 +228,8 @@ def _prepare_run(req: ContainerOptions) -> dict:
       4. Pull the image if it is not present locally
       5. Assemble the kwargs dict
 
-    The caller is responsible for setting `command`, `detach`, and `remove`
-    on the returned dict before passing it to containers.run().
+    The caller is responsible for setting `command` on the returned dict
+    before passing it to containers.run().
     """
     volumes = _validate_volumes(req.volumes) if req.volumes else None
 
@@ -243,12 +265,15 @@ def execute(req: ExecuteRequest, authorized: bool = Depends(get_api_key)):
         run_kwargs["command"] = req.cmd
 
         if req.detach:
-            container = client.containers.run(req.image, detach=True, **run_kwargs)
+            run_kwargs["detach"] = True
+            container = client.containers.run(req.image, **run_kwargs)
             return JSONResponse({"container_id": container.id, "status": "running"})
 
         # Blocking run — wait for completion and return logs inline.
+        run_kwargs["detach"] = False
+        run_kwargs["remove"] = True
         try:
-            output = client.containers.run(req.image, detach=False, remove=True, **run_kwargs)
+            output = client.containers.run(req.image, **run_kwargs)
             return JSONResponse({
                 "container_id": None,
                 "status": "exited",
@@ -258,14 +283,9 @@ def execute(req: ExecuteRequest, authorized: bool = Depends(get_api_key)):
         except ContainerError as e:
             # Non-zero exit — return logs inline rather than a 500 so the
             # caller can inspect the output.
-            stderr = e.stderr.decode(errors="replace") if isinstance(e.stderr, bytes) else (e.stderr or "")
-            stdout = e.stdout.decode(errors="replace") if hasattr(e, "stdout") and isinstance(e.stdout, bytes) else ""
-            return JSONResponse({
-                "container_id": None,
-                "status": "exited",
-                "exit_code": e.exit_status,
-                "logs": stdout + stderr,
-            })
+            body = _container_error_response(e, include_stdout=True)
+            body["container_id"] = None
+            return JSONResponse(body)
     except DockerException as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -292,12 +312,7 @@ def execute_cell(req: CellRequest, authorized: bool = Depends(get_api_key)):
     except ContainerError as e:
         # User code exited non-zero — return logs rather than a 500 so the
         # client can display the traceback inline, just like a local cell.
-        logs = e.stderr.decode(errors="replace") if isinstance(e.stderr, bytes) else (e.stderr or "")
-        return JSONResponse({
-            "status": "exited",
-            "exit_code": e.exit_status,
-            "logs": logs,
-        })
+        return JSONResponse(_container_error_response(e))
     except DockerException as e:
         raise HTTPException(status_code=500, detail=str(e))
 

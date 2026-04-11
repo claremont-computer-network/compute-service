@@ -180,6 +180,32 @@ def test_stop_job_calls_docker_stop_and_remove(api_client, mock_docker_client):
     container_mock.remove.assert_called_once()
 
 
+def test_stop_job_marks_stopped_before_remove(api_client, mock_docker_client):
+    """mark_stopped() must be called even when remove() raises DockerException."""
+    import app.main as m
+    import docker.errors as de
+
+    _submit_detach(api_client)
+    job_id = m.job_store.list_all()[0].job_id
+    container_mock = mock_docker_client.containers.get.return_value
+
+    # stop() succeeds, remove() blows up
+    call_count = 0
+    def _get_side_effect(cid):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 2:   # second containers.get() is for remove()
+            raise de.DockerException("remove failed")
+        return container_mock
+    mock_docker_client.containers.get.side_effect = _get_side_effect
+
+    resp = api_client.delete(f"{JOBS_URL}/{job_id}")
+    # remove() failure propagates as 500 …
+    assert resp.status_code == 500
+    # … but the registry must still reflect the stopped state
+    assert m.job_store.get(job_id).status == "stopped"
+
+
 def test_stop_job_404_for_unknown_id(api_client, mock_docker_client):
     """DELETE /v1/jobs/nonexistent returns 404."""
     resp = api_client.delete(f"{JOBS_URL}/nonexistent")

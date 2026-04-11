@@ -195,7 +195,7 @@ class CaasClient:
         return self._check(resp).json()
 
     def job(self, job_id: str) -> dict:
-        """Return a single job record by job_id (container short ID)."""
+        """Return a single job record by job_id (the full container ID)."""
         resp = self._call("GET", f"{self._base}/v1/jobs/{job_id}", headers=self._headers())
         return self._check(resp).json()
 

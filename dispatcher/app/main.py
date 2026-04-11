@@ -373,12 +373,23 @@ def stop_job(job_id: str, authorized: bool = Depends(get_api_key)):
     try:
         container = client.containers.get(job.container_id)
         container.stop()
-        container.remove()
     except NotFound:
-        pass  # already gone — still mark it stopped
+        pass  # already gone — mark it stopped below
     except DockerException as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+    # Mark stopped before remove so the registry is consistent even if
+    # remove() raises (the container is already dead at this point).
     job_store.mark_stopped(job_id)
+
+    try:
+        container = client.containers.get(job.container_id)
+        container.remove()
+    except NotFound:
+        pass  # already removed — not an error
+    except DockerException as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
     return JSONResponse({"job_id": job_id, "status": "stopped"})
 
 

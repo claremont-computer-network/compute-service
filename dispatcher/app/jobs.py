@@ -131,11 +131,12 @@ class JobStore:
 
     def get(self, job_id: str) -> t.Optional[JobRecord]:
         with self._lock:
-            return self._jobs.get(job_id)
+            record = self._jobs.get(job_id)
+            return record.model_copy(deep=True) if record is not None else None
 
     def list_all(self) -> list[JobRecord]:
         with self._lock:
-            return list(self._jobs.values())
+            return [r.model_copy(deep=True) for r in self._jobs.values()]
 
     # ── startup recovery ──────────────────────────────────────────────────────
 

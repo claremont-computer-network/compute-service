@@ -148,7 +148,9 @@ class JobStore:
         /v1/jobs immediately rather than being invisible until a new job runs.
         """
         try:
-            containers = docker_client.containers.list()
+            containers = docker_client.containers.list(
+                filters={"label": "caas.managed=true"}
+            )
         except Exception as exc:
             logger.warning("Could not list containers on startup: %s", exc)
             return

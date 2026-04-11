@@ -288,6 +288,28 @@ def test_hydrate_skips_already_known_jobs(mock_docker_client):
     assert store.get(c.id).submitted_at == known_time
 
 
+def test_hydrate_filters_by_caas_label(mock_docker_client):
+    """hydrate_from_docker() passes the caas.managed=true label filter to Docker
+    so the dispatcher container itself is never included in the job list."""
+    from app.jobs import JobStore
+
+    store = JobStore()
+    mock_docker_client.containers.list.return_value = []
+    store.hydrate_from_docker(mock_docker_client)
+
+    mock_docker_client.containers.list.assert_called_once_with(
+        filters={"label": "caas.managed=true"}
+    )
+
+
+def test_execute_detach_container_has_caas_label(api_client, mock_docker_client):
+    """containers.run() must include the caas.managed=true label so hydration
+    and external tooling can distinguish dispatcher-managed containers."""
+    _submit_detach(api_client)
+    call_kwargs = mock_docker_client.containers.run.call_args.kwargs
+    assert call_kwargs.get("labels", {}).get("caas.managed") == "true"
+
+
 # ---------------------------------------------------------------------------
 # Exited-container state synchronisation (round-4 review)
 # ---------------------------------------------------------------------------

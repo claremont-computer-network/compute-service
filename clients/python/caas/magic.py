@@ -104,15 +104,17 @@ def _dispatch_magic(line: str, cell: str) -> None:
     gpu = _build_gpu(args.gpu) if args.gpu else _config.get("default_gpu")
     timeout = args.timeout if args.timeout is not None else DEFAULT_TIMEOUT
 
+    # Collect container options that map 1:1 to execute_cell() kwargs.
+    # Adding a new %%dispatch flag only requires adding it to _parse_line()
+    # and to this dict — the execute_cell() call below does not change.
+    opts = {k: v for k, v in {
+        "shm_size": args.shm_size,
+        "ipc_mode": args.ipc_mode,
+    }.items() if v is not None}
+
     client = _make_client(timeout=timeout)
     try:
-        logs = client.execute_cell(
-            code=cell,
-            image=image,
-            gpu=gpu,
-            shm_size=args.shm_size,
-            ipc_mode=args.ipc_mode,
-        )
+        logs = client.execute_cell(code=cell, image=image, gpu=gpu, **opts)
     except CaasTimeoutError as exc:
         raise CaasMagicError(str(exc)) from exc
     except CaasError as exc:

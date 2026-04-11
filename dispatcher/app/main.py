@@ -253,6 +253,7 @@ def _prepare_run(req: ContainerOptions) -> dict:
         stdout=True,
         stderr=True,
         device_requests=device_requests,
+        labels={"caas.managed": "true"},
     )
     if req.shm_size:
         kwargs["shm_size"] = req.shm_size

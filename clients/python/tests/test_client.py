@@ -3,7 +3,7 @@ Tests for caas.client.CaasClient
 """
 import pytest
 import httpx
-from tests.conftest import BASE_URL, API_KEY, _make_response
+from tests.conftest import BASE_URL, API_KEY, _make_response, _assert_payload
 
 
 # ---------------------------------------------------------------------------
@@ -44,18 +44,17 @@ def test_execute_minimal(client, mock_transport):
 
 
 def test_execute_sends_full_payload(client, mock_transport):
-    import json
-
-    def _check(request):
-        body = json.loads(request.content)
-        assert body["image"] == "pytorch/pytorch:latest"
-        assert body["cmd"] == ["python", "train.py"]
-        assert body["env"] == {"EPOCHS": "10"}
-        assert body["gpu"] == {"device_ids": "all", "capabilities": ["gpu"]}
-        assert body["detach"] is True
-        return _make_response(200, {"container_id": "xyz", "status": "running"})
-
-    mock_transport[("POST", f"{BASE_URL}/v1/execute")] = _check
+    _assert_payload(
+        mock_transport, "POST", f"{BASE_URL}/v1/execute",
+        {
+            "image": "pytorch/pytorch:latest",
+            "cmd": ["python", "train.py"],
+            "env": {"EPOCHS": "10"},
+            "gpu": {"device_ids": "all", "capabilities": ["gpu"]},
+            "detach": True,
+        },
+        response_body={"container_id": "xyz", "status": "running"},
+    )
     client.execute(
         image="pytorch/pytorch:latest",
         cmd=["python", "train.py"],
@@ -96,27 +95,20 @@ def test_execute_cell_returns_logs(client, mock_transport):
 
 
 def test_execute_cell_sends_code_and_image(client, mock_transport):
-    import json
-
-    def _check(request):
-        body = json.loads(request.content)
-        assert body["code"] == "x = 1 + 1\nprint(x)"
-        assert body["image"] == "python:3.11-slim"
-        return _make_response(200, {"status": "exited", "logs": "2\n"})
-
-    mock_transport[("POST", f"{BASE_URL}/v1/execute/cell")] = _check
+    _assert_payload(
+        mock_transport, "POST", f"{BASE_URL}/v1/execute/cell",
+        {"code": "x = 1 + 1\nprint(x)", "image": "python:3.11-slim"},
+        response_body={"status": "exited", "logs": "2\n"},
+    )
     client.execute_cell(code="x = 1 + 1\nprint(x)", image="python:3.11-slim")
 
 
 def test_execute_cell_forwards_gpu(client, mock_transport):
-    import json
-
-    def _check(request):
-        body = json.loads(request.content)
-        assert body["gpu"] == {"device_ids": "all", "capabilities": ["gpu"]}
-        return _make_response(200, {"status": "exited", "logs": "Tesla T4\n"})
-
-    mock_transport[("POST", f"{BASE_URL}/v1/execute/cell")] = _check
+    _assert_payload(
+        mock_transport, "POST", f"{BASE_URL}/v1/execute/cell",
+        {"gpu": {"device_ids": "all", "capabilities": ["gpu"]}},
+        response_body={"status": "exited", "logs": "Tesla T4\n"},
+    )
     client.execute_cell(
         code="import torch; print(torch.cuda.get_device_name(0))",
         image="pytorch/pytorch:latest",
@@ -183,7 +175,6 @@ def test_logs_follow_streams_and_returns_text(mock_transport):
 def test_client_works_without_api_key(mock_transport):
     """When api_key is None no X-API-Key header should be sent."""
     from caas.client import CaasClient
-    import json
 
     def _check(request):
         assert "x-api-key" not in request.headers
@@ -288,15 +279,11 @@ def test_timeout_error_is_subclass_of_caas_error():
 
 def test_execute_sends_shm_and_ipc_in_payload(client, mock_transport):
     """execute() forwards shm_size and ipc_mode in the JSON body."""
-    import json
-
-    def _check(request):
-        body = json.loads(request.content)
-        assert body["shm_size"] == "2g"
-        assert body["ipc_mode"] == "host"
-        return _make_response(200, {"container_id": "abc123", "status": "running"})
-
-    mock_transport[("POST", f"{BASE_URL}/v1/execute")] = _check
+    _assert_payload(
+        mock_transport, "POST", f"{BASE_URL}/v1/execute",
+        {"shm_size": "2g", "ipc_mode": "host"},
+        response_body={"container_id": "abc123", "status": "running"},
+    )
     client.execute(image="pytorch/pytorch:latest", shm_size="2g", ipc_mode="host")
 
 
@@ -316,15 +303,11 @@ def test_execute_omits_shm_and_ipc_when_none(client, mock_transport):
 
 def test_execute_cell_sends_shm_and_ipc_in_payload(client, mock_transport):
     """execute_cell() forwards shm_size and ipc_mode in the JSON body."""
-    import json
-
-    def _check(request):
-        body = json.loads(request.content)
-        assert body["shm_size"] == "512m"
-        assert body["ipc_mode"] == "host"
-        return _make_response(200, {"status": "exited", "exit_code": 0, "logs": ""})
-
-    mock_transport[("POST", f"{BASE_URL}/v1/execute/cell")] = _check
+    _assert_payload(
+        mock_transport, "POST", f"{BASE_URL}/v1/execute/cell",
+        {"shm_size": "512m", "ipc_mode": "host"},
+        response_body={"status": "exited", "exit_code": 0, "logs": ""},
+    )
     client.execute_cell(code="print('hi')", image="python:3.12", shm_size="512m", ipc_mode="host")
 
 

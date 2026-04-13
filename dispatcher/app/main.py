@@ -41,16 +41,36 @@ class ResourceSlots:
     Counting-semaphore pool keyed by resource name.
 
     Each key maps to the number of concurrent slots allowed for that resource.
-    To add a new resource type (e.g. "tpu"), add it to ``from_env()`` — nothing
-    else in the codebase needs to change.
+    To configure additional slot pools for new resource names (for example,
+    ``"tpu"``), add them to ``from_env()``. Callers that choose which
+    resource name to acquire may also need corresponding updates.
     """
     _slots: dict[str, threading.Semaphore] = field(default_factory=dict)
+
+    @staticmethod
+    def _parse_slot_count(env_var: str, default: int) -> int:
+        raw = os.getenv(env_var, str(default))
+        try:
+            value = int(raw)
+        except ValueError:
+            logger.warning(
+                "%s=%r is not a valid integer – falling back to %d.",
+                env_var, raw, default,
+            )
+            return default
+        if value < 0:
+            logger.warning(
+                "%s=%r is negative – using 0 to avoid an invalid semaphore value.",
+                env_var, raw,
+            )
+            return 0
+        return value
 
     @classmethod
     def from_env(cls) -> "ResourceSlots":
         return cls(_slots={
-            "gpu": threading.Semaphore(int(os.getenv("MAX_CONCURRENT_GPU_JOBS", "1"))),
-            "cpu": threading.Semaphore(int(os.getenv("MAX_CONCURRENT_CPU_JOBS", "4"))),
+            "gpu": threading.Semaphore(cls._parse_slot_count("MAX_CONCURRENT_GPU_JOBS", 1)),
+            "cpu": threading.Semaphore(cls._parse_slot_count("MAX_CONCURRENT_CPU_JOBS", 4)),
         })
 
     def acquire(self, resource: str, timeout: int) -> bool:
@@ -66,12 +86,39 @@ class ResourceSlots:
             sem.release()
 
 
-QUEUE_TIMEOUT = int(os.getenv("QUEUE_TIMEOUT_SECS", "300"))
+def _parse_queue_timeout() -> int:
+    raw = os.getenv("QUEUE_TIMEOUT_SECS", "300")
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning(
+            "QUEUE_TIMEOUT_SECS=%r is not a valid integer – falling back to 300s.",
+            raw,
+        )
+        return 300
+    if value < 0:
+        logger.warning(
+            "QUEUE_TIMEOUT_SECS=%r is negative – using 0 (fail-fast mode).",
+            raw,
+        )
+        return 0
+    return value
+
+
+QUEUE_TIMEOUT = _parse_queue_timeout()
 resource_slots = ResourceSlots.from_env()
 
 
 def _acquire_slot(resource: str) -> None:
-    """Block until a slot is free, or raise 503 after QUEUE_TIMEOUT seconds."""
+    """Block until a slot is free, or raise 503 after QUEUE_TIMEOUT seconds.
+
+    These endpoints are synchronous (``def``, not ``async def``), so FastAPI
+    dispatches each request to a thread-pool worker.  The semaphore wait
+    occupies that worker thread, not the event-loop thread, which is the
+    correct behaviour for sync endpoints.  If these endpoints are ever
+    converted to ``async def``, replace this with an ``asyncio.Semaphore``
+    (or ``anyio.CapacityLimiter``) to avoid stalling the event loop.
+    """
     if not resource_slots.acquire(resource, timeout=QUEUE_TIMEOUT):
         raise HTTPException(
             status_code=503,

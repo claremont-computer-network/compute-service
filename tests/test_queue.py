@@ -12,14 +12,13 @@ Covers:
 import threading
 import pytest
 import docker.errors
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 EXEC_URL = "/v1/execute"
 CELL_URL = "/v1/execute/cell"
 
-# Payload fragments for GPU vs CPU requests
+# Payload fragment for GPU requests
 _GPU_FIELD = {"device_ids": "all"}   # valid GpuRequest body
-_NO_GPU = None                        # omit the field entirely
 
 
 def _gpu_payload(use_gpu: bool) -> dict:

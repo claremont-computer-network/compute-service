@@ -39,6 +39,11 @@ class JobRecord(BaseModel):
     docker_backed: bool = True  # always True; kept for forward-compatibility
     image: str
     cmd: t.Union[str, t.List[str], None] = None
+    # Execution mode: "cell" for synchronous execute_cell jobs, "detached" for
+    # background /v1/execute jobs.  Used by ResourceSamplerPlugin to decide
+    # whether to start a background sampling thread (cell jobs complete before
+    # the client can poll for live stats, so history must be collected inline).
+    job_type: str = "detached"
     submitted_at: datetime
     status: str = "running"                        # running | stopped
     exit_code: t.Optional[int] = None
@@ -133,7 +138,8 @@ class JobStore:
     # ── write ─────────────────────────────────────────────────────────────────
 
     def register(self, container, image: str,
-                 cmd: t.Union[str, t.List[str], None] = None) -> JobRecord:
+                 cmd: t.Union[str, t.List[str], None] = None,
+                 job_type: str = "detached") -> JobRecord:
         """Record a newly started detached container (docker_backed=True)."""
         record = JobRecord(
             job_id=container.id,
@@ -141,6 +147,7 @@ class JobStore:
             docker_backed=True,
             image=image,
             cmd=cmd,
+            job_type=job_type,
             submitted_at=datetime.now(timezone.utc),
         )
         with self._lock:

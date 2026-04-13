@@ -26,10 +26,11 @@ Alternatively, you can still call ``registry.register(YourPlugin())`` from
 your own startup code after ``app.main`` has been imported.
 """
 import importlib
+import inspect
 import logging
 import os
 
-from app.core.plugin import registry
+from app.core.plugin import CaasPlugin, registry
 from app.plugins.nvidia import NvidiaEntrypointPlugin
 from app.plugins.shm_ipc import ShmIpcPolicyPlugin
 from app.plugins.volumes import VolumePolicyPlugin
@@ -66,8 +67,8 @@ def _load_env_plugins() -> None:
         module_path, class_name = entry.rsplit(".", 1)
         try:
             module = importlib.import_module(module_path)
-        except ImportError:
-            logger.error(
+        except Exception:  # noqa: BLE001 — catches SyntaxError, RuntimeError, etc.
+            logger.exception(
                 "CAAS_PLUGINS: could not import module %r (entry %r) — skipping.",
                 module_path,
                 entry,
@@ -78,6 +79,13 @@ def _load_env_plugins() -> None:
             logger.error(
                 "CAAS_PLUGINS: module %r has no attribute %r (entry %r) — skipping.",
                 module_path,
+                class_name,
+                entry,
+            )
+            continue
+        if not (inspect.isclass(cls) and issubclass(cls, CaasPlugin)):
+            logger.error(
+                "CAAS_PLUGINS: %r is not a CaasPlugin subclass (entry %r) — skipping.",
                 class_name,
                 entry,
             )

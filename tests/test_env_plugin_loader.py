@@ -2,7 +2,8 @@
 Tests for the CAAS_PLUGINS env-var loader in app.plugins._load_env_plugins.
 """
 import pytest
-from unittest.mock import patch
+import unittest.mock
+from unittest.mock import patch, MagicMock
 from app.core.plugin import CaasPlugin, PluginRegistry
 
 
@@ -15,6 +16,14 @@ class _BrokenPlugin(CaasPlugin):
 
 
 _BROKEN_PATH = f"{__name__}._BrokenPlugin"
+
+
+class _NotAPlugin:
+    """A plain class that is NOT a CaasPlugin subclass."""
+
+
+# A non-class module-level attribute
+_MODULE_LEVEL_STRING = "i-am-not-a-plugin"
 
 
 # ---------------------------------------------------------------------------
@@ -151,4 +160,44 @@ def test_duplicate_name_is_skipped(isolated_loader, caplog):
         with caplog.at_level("ERROR", logger="caas.dispatcher"):
             loader()
     # Still only one entry
+    assert registry.names() == ["dummy-env-loaded"]
+
+
+def test_module_import_error_non_import_error_is_skipped(isolated_loader, caplog):
+    """A module that raises a non-ImportError at import time is logged and skipped."""
+    import importlib as _importlib
+    import app.plugins as _mod
+
+    registry, loader = isolated_loader
+    fake_importlib = MagicMock(wraps=_importlib)
+    fake_importlib.import_module.side_effect = RuntimeError("bad module")
+    with patch.object(_mod, "importlib", fake_importlib):
+        with patch.dict("os.environ", {"CAAS_PLUGINS": _DUMMY_PATH}):
+            with caplog.at_level("ERROR", logger="caas.dispatcher"):
+                loader()
+    assert "bad module" in caplog.text
+    assert registry.names() == []
+
+
+def test_non_plugin_class_is_skipped(isolated_loader, caplog):
+    """An attribute that exists but is not a CaasPlugin subclass is logged and skipped."""
+    registry, loader = isolated_loader
+    # _NotAPlugin is a plain class, not a CaasPlugin subclass
+    not_a_plugin_path = f"{__name__}._NotAPlugin"
+    with patch.dict("os.environ", {"CAAS_PLUGINS": f"{not_a_plugin_path},{_DUMMY_PATH}"}):
+        with caplog.at_level("ERROR", logger="caas.dispatcher"):
+            loader()
+    assert "_NotAPlugin" in caplog.text
+    assert registry.names() == ["dummy-env-loaded"]
+
+
+def test_non_class_attribute_is_skipped(isolated_loader, caplog):
+    """An attribute that is not a class at all (e.g. a string) is logged and skipped."""
+    registry, loader = isolated_loader
+    # _MODULE_LEVEL_STRING is a plain str defined at module level
+    string_path = f"{__name__}._MODULE_LEVEL_STRING"
+    with patch.dict("os.environ", {"CAAS_PLUGINS": f"{string_path},{_DUMMY_PATH}"}):
+        with caplog.at_level("ERROR", logger="caas.dispatcher"):
+            loader()
+    assert "_MODULE_LEVEL_STRING" in caplog.text
     assert registry.names() == ["dummy-env-loaded"]

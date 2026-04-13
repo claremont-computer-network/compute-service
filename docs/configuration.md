@@ -17,7 +17,7 @@ Stored in `dispatcher/.env` (loaded automatically by Docker Compose and by `pyth
 | `MAX_CONCURRENT_GPU_JOBS` | No | Maximum number of GPU jobs that can run simultaneously. Additional submissions wait up to `QUEUE_TIMEOUT_SECS` before receiving HTTP 503. Default: `1`. |
 | `MAX_CONCURRENT_CPU_JOBS` | No | Maximum number of CPU (non-GPU) jobs that can run simultaneously. Default: `4`. |
 | `QUEUE_TIMEOUT_SECS` | No | How long (seconds) a job submission will wait for a free resource slot before the dispatcher returns HTTP 503. Set to `0` for fail-fast behaviour. Default: `300`. |
-| `CAAS_PLUGINS` | No | Comma-separated list of fully-qualified plugin class paths to load at startup, e.g. `my_pkg.AuditPlugin,other_pkg.MetricsPlugin`. Each class must be a `CaasPlugin` subclass installed in the dispatcher's Python environment and is instantiated with no arguments. See [Extending → Plugin Guide](extending/plugin-guide.md). |
+| `CAAS_PLUGINS` | No | Comma-separated list of fully-qualified plugin class paths to load at startup, e.g. `my_pkg.AuditPlugin,other_pkg.MetricsPlugin`. Each entry must resolve to a `CaasPlugin` subclass installed in the dispatcher's Python environment; it is instantiated with no arguments. |
 
 **Example `dispatcher/.env`:**
 

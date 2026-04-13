@@ -243,11 +243,14 @@ class CellRequest(ContainerOptions):
         ),
     )
 
-
 # ── Auth ──────────────────────────────────────────────────────────────────────
+# Auth is intentionally kept here rather than extracted to a separate module.
+# Tests monkey-patch ``app.main.API_KEY`` directly; moving the variable to
+# another module would require every test that sets it to also patch that
+# module, making the test setup more fragile for no runtime benefit.
 
 def get_api_key(x_api_key: t.Optional[str] = Header(None)):
-    """FastAPI dependency: validate the X-Api-Key header against API_KEY."""
+    """FastAPI dependency: validate the ``X-Api-Key`` header against ``API_KEY``."""
     if not API_KEY:
         return True
     if not x_api_key or x_api_key != API_KEY:

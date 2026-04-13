@@ -30,7 +30,6 @@ symlinked NAS mount points.
 """
 from __future__ import annotations
 
-import os
 import typing as t
 from pathlib import Path
 
@@ -71,8 +70,8 @@ class VolumePolicyPlugin(CaasPlugin):
 
         # Pre-compute canonicalized allow-list roots once per request so we
         # don't call Path.resolve() O(n*m) times across volumes × allowed dirs.
-        allowed_roots = [
-            str(Path(p).resolve(strict=False))
+        allowed_root_paths = [
+            Path(p).resolve(strict=False)
             for p in _main.ALLOWED_HOST_DIRS
             if p
         ]
@@ -84,15 +83,19 @@ class VolumePolicyPlugin(CaasPlugin):
             # strict=False means the path need not exist yet (e.g. a newly
             # created output dir that hasn't been written to yet).
             try:
-                hp = str(Path(v.host_path).resolve(strict=False))
+                hp_path = Path(v.host_path).resolve(strict=False)
             except OSError as exc:
                 raise HTTPException(
                     status_code=400,
                     detail=f"Cannot resolve host path {v.host_path!r}: {exc}",
                 )
+            hp = str(hp_path)
+            # Use Path.is_relative_to() for containment so that edge cases like
+            # root='/' work correctly (root + os.sep would give '//' which no
+            # path starts with).
             allowed = any(
-                hp == root or hp.startswith(root + os.sep)
-                for root in allowed_roots
+                hp_path == root or hp_path.is_relative_to(root)
+                for root in allowed_root_paths
             )
             if not allowed:
                 raise HTTPException(

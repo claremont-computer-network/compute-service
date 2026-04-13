@@ -48,6 +48,10 @@ class JobRecord(BaseModel):
     # before the UI can poll for live stats) but also useful for any job that
     # finishes quickly.  Capped at 200 samples (~10 min at 3 s intervals).
     resource_history: t.List[ResourceStats] = Field(default_factory=list)
+    # Logs captured at container exit (execute_cell jobs only).  The container
+    # is removed immediately after the cell runs, so this is the only way to
+    # serve logs after the fact.  Capped at LOG_STORE_MAX_BYTES before storing.
+    stored_logs: t.Optional[str] = None
 
 
 def _fetch_resources(container) -> t.Optional[ResourceStats]:
@@ -104,7 +108,19 @@ class JobStore:
 
     Key: full container ID (container.id).  The full ID has no collision risk
     unlike the 12-char short_id prefix.
+
+    Memory bounds
+    ─────────────
+    MAX_JOBS        Hard cap on the number of job records kept.  When exceeded,
+                    the oldest stopped jobs are evicted first.  Running jobs are
+                    never evicted.
+    LOG_MAX_BYTES   Stored logs are truncated to this many bytes (UTF-8) before
+                    being written into the record.  Prevents a single chatty
+                    cell job from consuming large amounts of memory.
     """
+
+    MAX_JOBS: int = 500
+    LOG_MAX_BYTES: int = 256 * 1024   # 256 KiB
 
     def __init__(self) -> None:
         self._jobs: dict[str, JobRecord] = {}
@@ -125,6 +141,7 @@ class JobStore:
         )
         with self._lock:
             self._jobs[record.job_id] = record
+            self._evict_oldest_stopped()
         return record
 
     def register_sync(self, job_id: str, image: str,
@@ -145,6 +162,7 @@ class JobStore:
         )
         with self._lock:
             self._jobs[record.job_id] = record
+            self._evict_oldest_stopped()
         return record
 
     def mark_stopped(self, job_id: str, exit_code: t.Optional[int] = None) -> None:
@@ -165,6 +183,37 @@ class JobStore:
                 history = self._jobs[job_id].resource_history
                 if len(history) < 200:
                     history.append(sample)
+
+    def store_logs(self, job_id: str, logs: str) -> None:
+        """Persist captured logs for a completed job (execute_cell path).
+
+        Truncates to LOG_MAX_BYTES so a single chatty job cannot dominate
+        memory.  A truncation marker is appended when the text is cut.
+        """
+        encoded = logs.encode("utf-8")
+        if len(encoded) > self.LOG_MAX_BYTES:
+            truncated = encoded[: self.LOG_MAX_BYTES].decode("utf-8", errors="replace")
+            logs = truncated + "\n[... truncated: output exceeded 256 KiB ...]"
+        with self._lock:
+            if job_id in self._jobs:
+                self._jobs[job_id].stored_logs = logs
+
+    def _evict_oldest_stopped(self) -> None:
+        """Remove the oldest stopped jobs when the store exceeds MAX_JOBS.
+
+        Must be called with self._lock held.
+        Running jobs are never evicted — only stopped ones are candidates.
+        """
+        if len(self._jobs) <= self.MAX_JOBS:
+            return
+        stopped = sorted(
+            (r for r in self._jobs.values() if r.status == "stopped"),
+            key=lambda r: r.submitted_at,
+        )
+        to_remove = len(self._jobs) - self.MAX_JOBS
+        for record in stopped[:to_remove]:
+            del self._jobs[record.job_id]
+            logger.debug("Evicted old job record %s", record.job_id)
 
     # ── read ──────────────────────────────────────────────────────────────────
 

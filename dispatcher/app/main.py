@@ -458,6 +458,12 @@ def execute_cell(req: CellRequest, authorized: bool = Depends(get_api_key)):
         # meaningful for containers.run(detach=False)).  Strip them before
         # creating so we don't get a TypeError with docker-py >= 6.
         create_kwargs = {k: v for k, v in run_kwargs.items() if k not in ("stdout", "stderr")}
+        # NVIDIA NGC images (nvcr.io/*) run an entrypoint script that prints
+        # a multi-page banner to stdout before exec-ing the user command.
+        # Bypassing the entrypoint entirely gives clean output without any
+        # image modifications or env-var hacks.
+        if req.image.startswith("nvcr.io/"):
+            create_kwargs.setdefault("entrypoint", "")
         # Create (but don't start) so we have a real container ID to register.
         container = client.containers.create(req.image, **create_kwargs)
         record = job_store.register(container, image=req.image, cmd=cmd)

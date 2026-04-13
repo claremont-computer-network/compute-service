@@ -40,7 +40,11 @@ def make_docker_client() -> MagicMock:
     # stats raises by default — _fetch_resources returns None gracefully.
     # Tests that need live stats should set container.stats.return_value explicitly.
     container.stats.side_effect = Exception("no stats in tests by default")
+    container.wait.return_value = {"StatusCode": 0}
     client.containers.run.return_value = container
+
+    # containers.create returns the same stub (used by execute_cell)
+    client.containers.create.return_value = container
 
     # containers.get returns the same stub by default
     client.containers.get.return_value = container

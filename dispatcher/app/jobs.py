@@ -19,7 +19,7 @@ import threading
 import typing as t
 from datetime import datetime, timezone
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger("caas.jobs")
 
@@ -34,15 +34,20 @@ class ResourceStats(BaseModel):
 
 class JobRecord(BaseModel):
     """Immutable identity fields plus mutable status for one dispatched job."""
-    job_id: str                                    # full container ID, or a UUID for non-container-backed jobs
-    container_id: str                              # full 64-char Docker container ID, or same UUID as job_id
-    docker_backed: bool = True                     # False for execute_cell jobs tracked by UUID only
+    job_id: str          # full 64-char Docker container ID
+    container_id: str    # same as job_id; kept separate for historical compat
+    docker_backed: bool = True  # always True; kept for forward-compatibility
     image: str
     cmd: t.Union[str, t.List[str], None] = None
     submitted_at: datetime
     status: str = "running"                        # running | stopped
     exit_code: t.Optional[int] = None
     resources: t.Optional[ResourceStats] = None   # populated on GET, not at submit
+    # Sampled resource history collected by a background thread while the
+    # container is running.  Populated for execute_cell jobs (which complete
+    # before the UI can poll for live stats) but also useful for any job that
+    # finishes quickly.  Capped at 200 samples (~10 min at 3 s intervals).
+    resource_history: t.List[ResourceStats] = Field(default_factory=list)
 
 
 def _fetch_resources(container) -> t.Optional[ResourceStats]:
@@ -148,6 +153,18 @@ class JobStore:
                 self._jobs[job_id].status = "stopped"
                 if exit_code is not None:
                     self._jobs[job_id].exit_code = exit_code
+
+    def append_resource_sample(self, job_id: str, sample: ResourceStats) -> None:
+        """Append one resource-stats sample collected during a running job.
+
+        Silently drops the sample if the job already has 200 entries (~10 min
+        at the default 3-second polling interval) to prevent unbounded growth.
+        """
+        with self._lock:
+            if job_id in self._jobs:
+                history = self._jobs[job_id].resource_history
+                if len(history) < 200:
+                    history.append(sample)
 
     # ── read ──────────────────────────────────────────────────────────────────
 

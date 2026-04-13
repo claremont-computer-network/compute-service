@@ -145,7 +145,7 @@ def test_cell_slot_released_on_docker_exception(api_client, mock_docker_client, 
     resource = _resource(use_gpu)
     before = _slot_value(m.resource_slots._slots[resource])
 
-    mock_docker_client.containers.run.side_effect = docker.errors.DockerException("cell boom")
+    mock_docker_client.containers.create.side_effect = docker.errors.DockerException("cell boom")
     payload = {"image": "python:3.11-slim", "code": "x=1", **_gpu_payload(use_gpu)}
     resp = api_client.post(CELL_URL, json=payload)
     assert resp.status_code == 500

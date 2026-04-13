@@ -47,12 +47,38 @@
       white-space: nowrap;
     }
 
-    tbody tr {
+    tbody tr.job-row {
       border-bottom: 1px solid #161b22;
       transition: background 0.1s;
+      cursor: pointer;
     }
 
-    tbody tr:hover { background: #161b22; }
+    tbody tr.job-row:hover  { background: #161b22; }
+    tbody tr.job-row:focus  { outline: 2px solid #58a6ff; outline-offset: -2px; background: #161b22; }
+
+    tbody tr.log-row td {
+      padding: 0;
+      border-bottom: 1px solid #21262d;
+    }
+
+    .log-panel {
+      background: #010409;
+      border-top: 1px solid #21262d;
+      padding: 0.75rem 1rem;
+      overflow-x: auto;
+    }
+
+    .log-panel pre {
+      font-size: 0.8rem;
+      color: #8b949e;
+      white-space: pre-wrap;
+      word-break: break-all;
+      max-height: 300px;
+      overflow-y: auto;
+    }
+
+    .log-panel .log-loading { color: #3d444d; font-style: italic; }
+    .log-panel .log-error   { color: #f85149; }
 
     td {
       padding: 0.5rem 0.75rem;
@@ -70,7 +96,7 @@
 
     .cmd {
       color: #8b949e;
-      max-width: 260px;
+      max-width: 200px;
       overflow: hidden;
       text-overflow: ellipsis;
     }
@@ -96,6 +122,17 @@
 
     .resource      { color: #d2a8ff; }
     .resource-null { color: #3d444d; }
+    .duration      { color: #8b949e; font-size: 0.8rem; }
+
+    /* Sparkline canvas cells */
+    .spark-cell {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+    .spark-cell canvas { display: block; }
+    .spark-label { color: #d2a8ff; min-width: 52px; text-align: right; }
+    .spark-label.null { color: #3d444d; }
 
     /* Action buttons — wired to DELETE /v1/jobs/{id}, disabled when not running */
     .actions button {
@@ -141,6 +178,7 @@
         <th>Command</th>
         <th>Status</th>
         <th>Submitted</th>
+        <th>Duration</th>
         <th>CPU %</th>
         <th>Memory</th>
         <th>Exit</th>
@@ -148,13 +186,16 @@
       </tr>
     </thead>
     <tbody id="job-body">
-      <tr id="empty"><td colspan="9">No jobs yet.</td></tr>
+      <tr id="empty"><td colspan="10">No jobs yet.</td></tr>
     </tbody>
   </table>
 
   <script>
     // ── config ────────────────────────────────────────────────────────────────
-    const INTERVAL = 3000; // poll interval in ms
+    const INTERVAL    = 3000; // poll interval in ms
+    const SPARK_W     = 60;   // sparkline canvas width px
+    const SPARK_H     = 24;   // sparkline canvas height px
+    const HISTORY_MAX = 40;   // readings to keep per job (~2 min at 3s interval)
 
     // Derive the API base from the page URL so the UI works behind reverse
     // proxies (e.g. /proxy/192.168.1.101:8000/ui/).
@@ -207,6 +248,39 @@
       return `${Math.floor(diff / 3600)}h ago`;
     }
 
+    // Elapsed duration since submitted_at as a compact string.
+    // For stopped jobs, duration is frozen at stop time (we don't have a
+    // stopped_at field yet, so we use the last known elapsed from history).
+    // Returns "—" for missing, epoch (dispatcher hydrate sentinel), or
+    // implausibly large timestamps (> 30 days) to avoid multi-year displays.
+    const _EPOCH_MS      = new Date("1970-01-01T00:00:00Z").getTime();
+    const _MAX_ELAPSED_S = 30 * 24 * 3600; // 30 days — anything older is "unknown"
+
+    function duration(iso, jobId) {
+      if (!iso) return "—";
+      const h = _history[jobId];
+      // For stopped jobs use the frozen elapsed stored when we saw the stop.
+      if (h && h.stoppedElapsed != null) {
+        const se = h.stoppedElapsed;
+        if (!Number.isFinite(se) || se < 0 || se > _MAX_ELAPSED_S) return "—";
+        return fmtElapsed(se);
+      }
+      const ts = new Date(iso).getTime();
+      // Treat epoch (dispatcher hydrate sentinel) or unparseable dates as unknown.
+      if (!isFinite(ts) || ts <= _EPOCH_MS) return "—";
+      const secs = Math.floor((Date.now() - ts) / 1000);
+      if (secs < 0 || secs > _MAX_ELAPSED_S) return "—";
+      return fmtElapsed(secs);
+    }
+
+    function fmtElapsed(secs) {
+      if (secs <  60)   return `${secs}s`;
+      if (secs < 3600)  return `${Math.floor(secs / 60)}m ${secs % 60}s`;
+      const h = Math.floor(secs / 3600);
+      const m = Math.floor((secs % 3600) / 60);
+      return `${h}h ${m}m`;
+    }
+
     function badge(status) {
       const cls = { running: "badge-running", stopped: "badge-stopped",
                     failed:  "badge-failed"  }[status] ?? "badge-unknown";
@@ -221,15 +295,297 @@
         : `<span class="exit-fail">${code}</span>`;
     }
 
-    function resourceCell(val, unit, decimals = 1) {
-      if (val === null || val === undefined)
-        return `<span class="resource-null">—</span>`;
-      return `<span class="resource">${val.toFixed(decimals)}${unit}</span>`;
+    // ── resource history ──────────────────────────────────────────────────────
+    // _history[job_id] = { cpu: [...], mem: [...], peakMem: float|null, stoppedElapsed: int|null }
+    const _history = {};
+
+    function ensureHistory(jobId) {
+      if (!_history[jobId])
+        _history[jobId] = { cpu: [], mem: [], peakMem: null, stoppedElapsed: null };
+      return _history[jobId];
+    }
+
+    function recordHistory(job) {
+      const h = ensureHistory(job.job_id);
+      const res = job.resources;
+      if (res && job.status === "running") {
+        h.cpu.push(res.cpu_percent);
+        h.mem.push(res.mem_usage_mib);
+        if (h.cpu.length > HISTORY_MAX) h.cpu.shift();
+        if (h.mem.length > HISTORY_MAX) h.mem.shift();
+        if (h.peakMem === null || res.mem_usage_mib > h.peakMem)
+          h.peakMem = res.mem_usage_mib;
+      }
+      // Freeze elapsed time the moment we first see a stopped job.
+      // Validate the timestamp first — epoch sentinel or malformed dates
+      // must not store NaN/huge values that would survive for the session.
+      if (job.status !== "running" && h.stoppedElapsed === null && job.submitted_at) {
+        const ts = new Date(job.submitted_at).getTime();
+        if (isFinite(ts) && ts > _EPOCH_MS) {
+          const secs = Math.floor((Date.now() - ts) / 1000);
+          if (secs >= 0 && secs <= _MAX_ELAPSED_S) h.stoppedElapsed = secs;
+        }
+      }
+    }
+
+    // ── sparkline ─────────────────────────────────────────────────────────────
+    // Draws a small canvas line chart in-place on a <canvas> element.
+    // color: CSS hex string. values: number[]. max: scale ceiling (0 = auto).
+    function drawSparkline(canvas, values, color, maxVal) {
+      const ctx  = canvas.getContext("2d");
+      const w    = canvas.width;
+      const h    = canvas.height;
+      ctx.clearRect(0, 0, w, h);
+      if (!values || values.length < 2) return;
+
+      const lo   = 0;
+      const hi   = maxVal > 0 ? maxVal : (Math.max(...values) || 1);
+      const step = w / (values.length - 1);
+
+      // Faint fill under the line.
+      ctx.beginPath();
+      ctx.moveTo(0, h - ((values[0] - lo) / (hi - lo)) * h);
+      for (let i = 1; i < values.length; i++) {
+        ctx.lineTo(i * step, h - ((values[i] - lo) / (hi - lo)) * h);
+      }
+      ctx.lineTo((values.length - 1) * step, h);
+      ctx.lineTo(0, h);
+      ctx.closePath();
+      ctx.fillStyle = color + "28"; // ~16% opacity fill
+      ctx.fill();
+
+      // Main line.
+      ctx.beginPath();
+      ctx.moveTo(0, h - ((values[0] - lo) / (hi - lo)) * h);
+      for (let i = 1; i < values.length; i++) {
+        ctx.lineTo(i * step, h - ((values[i] - lo) / (hi - lo)) * h);
+      }
+      ctx.strokeStyle = color;
+      ctx.lineWidth   = 1.5;
+      ctx.lineJoin    = "round";
+      ctx.stroke();
+
+      // Dot at current value.
+      const lastX = (values.length - 1) * step;
+      const lastY = h - ((values[values.length - 1] - lo) / (hi - lo)) * h;
+      ctx.beginPath();
+      ctx.arc(lastX, lastY, 2.5, 0, Math.PI * 2);
+      ctx.fillStyle = color;
+      ctx.fill();
+    }
+
+    // Render a spark cell HTML string (canvas + label).
+    // After inserting into the DOM, call paintAllSparklines() to actually draw.
+    // status: "running" | "stopped" | other — used to prefer peakMem for stopped jobs.
+    function sparkCellHtml(jobId, kind, status) {
+      const h   = _history[jobId];
+      const arr = h ? h[kind] : [];
+      const cur = arr.length ? arr[arr.length - 1] : null;
+      const stopped = status !== "running";
+
+      let label;
+      if (kind === "cpu") {
+        label = cur !== null ? cur.toFixed(1) + "%" : "—";
+      } else {
+        // mem — prefer peak for stopped jobs so the high-water mark is always shown.
+        const peak = h?.peakMem ?? null;
+        if (stopped && peak != null) {
+          label = peak.toFixed(0) + " MiB";
+        } else if (cur !== null) {
+          label = cur.toFixed(0) + " MiB";
+        } else if (peak != null) {
+          label = peak.toFixed(0) + " MiB";
+        } else {
+          label = "—";
+        }
+      }
+
+      const nullCls = cur === null && h?.peakMem == null ? " null" : "";
+
+      return `<div class="spark-cell">
+        <canvas width="${SPARK_W}" height="${SPARK_H}"
+                data-spark-job="${esc(jobId)}" data-spark-kind="${kind}"></canvas>
+        <span class="spark-label${nullCls}">${esc(label)}</span>
+      </div>`;
+    }
+
+    // Walk all spark canvases in the DOM and redraw them.
+    function paintAllSparklines() {
+      document.querySelectorAll("canvas[data-spark-job]").forEach(canvas => {
+        const jobId = canvas.dataset.sparkJob;
+        const kind  = canvas.dataset.sparkKind;
+        const h     = _history[jobId];
+        if (!h) return;
+        const arr   = h[kind];
+        const color = kind === "cpu" ? "#d2a8ff" : "#79c0ff";
+        // For memory, scale to the peak so the chart doesn't reset when usage
+        // drops at the end.
+        const maxVal = kind === "mem" && h.peakMem != null ? h.peakMem * 1.05 : 0;
+        drawSparkline(canvas, arr, color, maxVal);
+      });
+    }
+
+    // ── logs panel ────────────────────────────────────────────────────────────
+    // Toggled by clicking a job row.
+    // For docker_backed jobs: fetches GET /v1/logs/{container_id}.
+    // For cell jobs (docker_backed=false): shows stored logs from job record.
+    const _openLogs = new Set(); // job IDs currently expanded
+
+    // Cache of fetched log text keyed by job_id.
+    // Stopped jobs: cached forever (logs are immutable once the container exits).
+    // Running jobs: cache is invalidated at most once per LOG_REFRESH_INTERVAL ms
+    //   so open panels stay reasonably fresh without re-fetching every poll.
+    // Value is either the resolved log string, or an in-flight Promise that
+    // resolves to that string while a fetch is pending.
+    const _logCache = {};
+    const LOG_REFRESH_INTERVAL = 15_000; // ms between log refreshes for running jobs
+    // _logLastFetch[job_id] = timestamp of the last fetch start for running jobs.
+    const _logLastFetch = {};
+
+    async function fetchLogs(job) {
+      if (!job.docker_backed) {
+        // Cell job — logs were returned inline in execute_cell response and
+        // are not stored on the server; show a placeholder.
+        return "(Cell job logs are returned inline in the notebook — not stored server-side.)";
+      }
+      try {
+        const resp = await fetch(
+          `${_API_BASE}/v1/logs/${job.container_id}`,
+          { headers: authHeaders() }
+        );
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({}));
+          throw new Error(err.detail ?? `HTTP ${resp.status}`);
+        }
+        const data = await resp.json();
+        return data.logs ?? "(no output)";
+      } catch (e) {
+        throw e;
+      }
+    }
+
+    // Populate a log panel <pre> for jobId.
+    // Uses cache if available; otherwise fetches and populates the cache.
+    // The Promise itself is stored in _logCache while the fetch is in flight so
+    // concurrent callers (e.g. restoreLogRows() racing with toggleLogs()) await
+    // the same request rather than issuing a second one.
+
+    // Auto-scroll to the bottom of a log <pre> only when the user is already
+    // near the bottom (within 80px), so manual scrolling up is not disrupted
+    // on poll-driven refreshes. firstOpen=true bypasses the check on initial load.
+    function maybeScrollToBottom(pre, firstOpen = false) {
+      if (!pre) return;
+      const nearBottom = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 80;
+      if (firstOpen || nearBottom) pre.scrollTop = pre.scrollHeight;
+    }
+
+    async function populateLogPanel(logRow, job, firstOpen = false) {
+      const cached = _logCache[job.job_id];
+
+      // Already resolved — fill immediately.
+      if (typeof cached === "string") {
+        const pre = logRow.querySelector("pre");
+        if (pre) { pre.className = ""; pre.textContent = cached; maybeScrollToBottom(pre, firstOpen); }
+        return;
+      }
+
+      // In-flight — wait for the existing promise instead of starting a new fetch.
+      if (cached instanceof Promise) {
+        try {
+          const text = await cached;
+          const pre = logRow.querySelector("pre");
+          if (pre) { pre.className = ""; pre.textContent = text; maybeScrollToBottom(pre, firstOpen); }
+        } catch (e) {
+          const pre = logRow.querySelector("pre");
+          if (pre) { pre.className = "log-error"; pre.textContent = `Error loading logs: ${e.message}`; }
+        }
+        return;
+      }
+
+      // Nothing cached — start a fetch and store the Promise immediately.
+      // Stamp the fetch start time so restoreLogRows() can throttle refreshes.
+      _logLastFetch[job.job_id] = Date.now();
+      const promise = fetchLogs(job).then(text => {
+        _logCache[job.job_id] = text;
+        return text;
+      }).catch(e => {
+        // Don't cache errors — allow retry on next toggle.
+        delete _logCache[job.job_id];
+        throw e;
+      });
+      _logCache[job.job_id] = promise;
+
+      try {
+        const text = await promise;
+        const pre = logRow.querySelector("pre");
+        if (pre) { pre.className = ""; pre.textContent = text; maybeScrollToBottom(pre, firstOpen); }
+      } catch (e) {
+        const pre = logRow.querySelector("pre");
+        if (pre) { pre.className = "log-error"; pre.textContent = `Error loading logs: ${e.message}`; }
+      }
+    }
+
+    // Insert or remove the log expansion row immediately after a job row.
+    async function toggleLogs(jobId, job) {
+      const jobRow = document.querySelector(`tr.job-row[data-job-id="${CSS.escape(jobId)}"]`);
+      if (!jobRow) return;
+
+      if (_openLogs.has(jobId)) {
+        // Collapse
+        _openLogs.delete(jobId);
+        jobRow.setAttribute("aria-expanded", "false");
+        const existing = document.getElementById(`log-row-${jobId}`);
+        if (existing) existing.remove();
+        return;
+      }
+
+      // Expand
+      _openLogs.add(jobId);
+      jobRow.setAttribute("aria-expanded", "true");
+      const logRow = document.createElement("tr");
+      logRow.className = "log-row";
+      logRow.id = `log-row-${jobId}`;
+      logRow.innerHTML = `<td colspan="10"><div class="log-panel">
+        <pre class="log-loading">Loading logs…</pre>
+      </div></td>`;
+      jobRow.insertAdjacentElement("afterend", logRow);
+      await populateLogPanel(logRow, job, /* firstOpen */ true);
+    }
+
+    // Re-insert open log rows after the table is re-rendered by poll().
+    // Uses the cache — no extra HTTP requests unless the job is still running
+    // and LOG_REFRESH_INTERVAL ms have elapsed since the last fetch.
+    function restoreLogRows() {
+      for (const jobId of _openLogs) {
+        if (document.getElementById(`log-row-${jobId}`)) continue;
+        const jobRow = document.querySelector(`tr.job-row[data-job-id="${CSS.escape(jobId)}"]`);
+        if (!jobRow) continue;
+
+        const logRow = document.createElement("tr");
+        logRow.className = "log-row";
+        logRow.id = `log-row-${jobId}`;
+        logRow.innerHTML = `<td colspan="10"><div class="log-panel">
+          <pre class="log-loading">Loading logs…</pre>
+        </div></td>`;
+        jobRow.insertAdjacentElement("afterend", logRow);
+        jobRow.setAttribute("aria-expanded", "true");
+
+        const job = _jobMap[jobId] ?? { job_id: jobId, docker_backed: true };
+        // For running jobs, only invalidate the cache if enough time has passed
+        // since the last fetch started (tracked by populateLogPanel).
+        if (job.status === "running") {
+          const last = _logLastFetch[jobId] ?? 0;
+          if (Date.now() - last >= LOG_REFRESH_INTERVAL) {
+            delete _logCache[jobId];
+            // _logLastFetch will be updated by populateLogPanel when it starts.
+          }
+        }
+        populateLogPanel(logRow, job);
+      }
     }
 
     // ── render ────────────────────────────────────────────────────────────────
-    // To add more actions later (logs, restart, etc.) add a <button> here.
-    // Each button gets data-action and data-id; wire it up in handleAction().
+    // To add more actions, add a <button> and wire it in handleAction().
     function renderRow(job) {
       const shortId = esc((job.job_id ?? "?").slice(0, 12));
       const fullId  = esc(job.job_id ?? "?");
@@ -239,18 +595,20 @@
         : (typeof job.cmd === "string" ? job.cmd : "");
       const cmd     = esc(cmdStr);
       const image   = esc(job.image ?? "?");
-      const res     = job.resources ?? {};
       const running = job.status === "running";
 
       return `
-        <tr data-job-id="${fullId}">
+        <tr class="job-row" data-job-id="${fullId}"
+            tabindex="0" role="button" aria-expanded="false"
+            title="Click to toggle logs">
           <td class="job-id" title="${fullId}">${shortId}</td>
           <td class="image">${image}</td>
           <td class="cmd" title="${cmd}">${cmd}</td>
           <td>${badge(job.status)}</td>
           <td>${relativeTime(job.submitted_at)}</td>
-          <td>${resourceCell(res.cpu_percent,   "%",    1)}</td>
-          <td>${resourceCell(res.mem_usage_mib, " MiB", 0)}</td>
+          <td class="duration" data-job-id="${fullId}" data-submitted="${esc(job.submitted_at ?? "")}">${duration(job.submitted_at, job.job_id)}</td>
+          <td>${sparkCellHtml(job.job_id, "cpu", job.status)}</td>
+          <td>${sparkCellHtml(job.job_id, "mem", job.status)}</td>
           <td>${exitCell(job.exit_code)}</td>
           <td class="actions">
             <button data-action="stop" data-id="${fullId}"
@@ -263,8 +621,6 @@
     }
 
     // ── actions ───────────────────────────────────────────────────────────────
-    // Calls DELETE /v1/jobs/{id} — the only existing mutating endpoint.
-    // Add cases here when more actions are needed.
     async function handleAction(action, jobId) {
       if (action === "stop") {
         if (!confirm(`Stop job ${jobId.slice(0, 12)}?`)) return;
@@ -280,9 +636,7 @@
         } catch (e) {
           alert(`Error: ${e.message}`);
         }
-        // Request an immediate refresh. If a poll is already in flight,
-        // set a flag so the loop fires again as soon as it finishes rather
-        // than starting a second concurrent request.
+        // Request an immediate refresh.
         _refreshRequested = true;
         if (!_inFlight && _pollTimer !== null) {
           clearTimeout(_pollTimer);
@@ -291,11 +645,46 @@
       }
     }
 
+    // _jobMap: last fetched jobs keyed by job_id, used for log fetches.
+    let _jobMap = {};
+
     document.getElementById("job-body").addEventListener("click", e => {
+      // Stop button — don't also trigger row expand.
       const btn = e.target.closest("button[data-action]");
-      if (!btn || btn.disabled) return;
-      handleAction(btn.dataset.action, btn.dataset.id);
+      if (btn) {
+        if (!btn.disabled) handleAction(btn.dataset.action, btn.dataset.id);
+        return;
+      }
+      // Row click — toggle logs.
+      const row = e.target.closest("tr.job-row");
+      if (row) {
+        const jobId = row.dataset.jobId;
+        toggleLogs(jobId, _jobMap[jobId] ?? { job_id: jobId, docker_backed: true });
+      }
     });
+
+    // Keyboard support: Enter or Space on a focused row toggles the log panel.
+    // Guard against focus being on the Stop button so native button activation
+    // (Enter/Space on <button>) is not intercepted.
+    document.getElementById("job-body").addEventListener("keydown", e => {
+      if (e.key !== "Enter" && e.key !== " ") return;
+      if (e.target.closest("button[data-action]")) return;
+      const row = e.target.closest("tr.job-row");
+      if (!row) return;
+      e.preventDefault();
+      const jobId = row.dataset.jobId;
+      toggleLogs(jobId, _jobMap[jobId] ?? { job_id: jobId, docker_backed: true });
+    });
+
+    // ── duration ticker ───────────────────────────────────────────────────────
+    // Updates duration cells every second without a full re-render.
+    setInterval(() => {
+      document.querySelectorAll("td.duration[data-job-id]").forEach(td => {
+        const jobId    = td.dataset.jobId;
+        const submitted = td.dataset.submitted;
+        td.textContent = duration(submitted, jobId);
+      });
+    }, 1000);
 
     // ── poll ──────────────────────────────────────────────────────────────────
     async function poll() {
@@ -304,9 +693,21 @@
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const jobs = await resp.json();
 
+        // Accumulate history before rendering.
+        jobs.forEach(recordHistory);
+        _jobMap = Object.fromEntries(jobs.map(j => [j.job_id, j]));
+
+        // Prune client-side state for jobs no longer returned by the server
+        // to avoid unbounded memory growth in long-running sessions.
+        const liveIds = new Set(jobs.map(j => j.job_id));
+        for (const id of Object.keys(_history))     { if (!liveIds.has(id)) delete _history[id]; }
+        for (const id of Object.keys(_logCache))    { if (!liveIds.has(id)) delete _logCache[id]; }
+        for (const id of Object.keys(_logLastFetch)){ if (!liveIds.has(id)) delete _logLastFetch[id]; }
+        for (const id of _openLogs)                 { if (!liveIds.has(id)) _openLogs.delete(id); }
+
         const body = document.getElementById("job-body");
         if (!jobs.length) {
-          body.innerHTML = `<tr id="empty"><td colspan="9">No jobs yet.</td></tr>`;
+          body.innerHTML = `<tr id="empty"><td colspan="10">No jobs yet.</td></tr>`;
         } else {
           // running jobs first, then most-recently submitted
           jobs.sort((a, b) => {
@@ -315,7 +716,13 @@
             return new Date(b.submitted_at) - new Date(a.submitted_at);
           });
           body.innerHTML = jobs.map(renderRow).join("");
+
+          // Re-insert open log panels without re-fetching (uses cache).
+          restoreLogRows();
         }
+
+        // Draw sparklines after the DOM is updated.
+        paintAllSparklines();
 
         const el = document.getElementById("status");
         el.textContent = `updated ${new Date().toLocaleTimeString()} · ${jobs.length} job${jobs.length !== 1 ? "s" : ""}`;

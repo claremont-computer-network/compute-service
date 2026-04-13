@@ -470,10 +470,10 @@ def execute_cell(req: CellRequest, authorized: bool = Depends(get_api_key)):
         job_store.mark_stopped(job_id, exit_code=e.exit_status)
         return JSONResponse(_container_error_response(e))
     except HTTPException:
-        job_store.mark_stopped(job_id)
+        job_store.mark_stopped(job_id, exit_code=-1)
         raise
     except DockerException as e:
-        job_store.mark_stopped(job_id)
+        job_store.mark_stopped(job_id, exit_code=-1)
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         resource_slots.release(resource)
@@ -500,6 +500,10 @@ def _enrich_job_data(job, data: dict) -> None:
     _TERMINAL_STATES = {"exited", "dead"}
 
     if job.status != "running":
+        return
+    if not job.docker_backed:
+        # Non-container-backed job (e.g. execute_cell tracked by UUID).
+        # Status is managed directly by execute_cell — skip Docker enrichment.
         return
     try:
         container = client.containers.get(job.container_id)

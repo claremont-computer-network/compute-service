@@ -34,8 +34,9 @@ class ResourceStats(BaseModel):
 
 class JobRecord(BaseModel):
     """Immutable identity fields plus mutable status for one dispatched job."""
-    job_id: str                                    # = full container ID
-    container_id: str                              # full 64-char ID (same value, kept for API compat)
+    job_id: str                                    # full container ID, or a UUID for non-container-backed jobs
+    container_id: str                              # full 64-char Docker container ID, or same UUID as job_id
+    docker_backed: bool = True                     # False for execute_cell jobs tracked by UUID only
     image: str
     cmd: t.Union[str, t.List[str], None] = None
     submitted_at: datetime
@@ -108,10 +109,11 @@ class JobStore:
 
     def register(self, container, image: str,
                  cmd: t.Union[str, t.List[str], None] = None) -> JobRecord:
-        """Record a newly started detached container."""
+        """Record a newly started detached container (docker_backed=True)."""
         record = JobRecord(
             job_id=container.id,
             container_id=container.id,
+            docker_backed=True,
             image=image,
             cmd=cmd,
             submitted_at=datetime.now(timezone.utc),
@@ -122,14 +124,16 @@ class JobStore:
 
     def register_sync(self, job_id: str, image: str,
                       cmd: t.Union[str, t.List[str], None] = None) -> JobRecord:
-        """Record a synchronous (non-detached) job by ID without a container object.
+        """Record a synchronous execute_cell job by explicit UUID (docker_backed=False).
 
-        Used for execute_cell jobs where the container is gone by the time we
-        want to register it, so we track them for history in the UI.
+        job_id and container_id are a UUID, not a Docker container ID.
+        _enrich_job_data skips Docker enrichment for these records so it will
+        not attempt containers.get() with a non-container ID.
         """
         record = JobRecord(
             job_id=job_id,
             container_id=job_id,
+            docker_backed=False,
             image=image,
             cmd=cmd,
             submitted_at=datetime.now(timezone.utc),

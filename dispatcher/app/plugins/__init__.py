@@ -93,12 +93,13 @@ def _load_env_plugins() -> None:
         try:
             plugin = cls()
             registry.register(plugin)
-            logger.info("CAAS_PLUGINS: registered %r (priority %d).", entry, plugin.priority)
         except Exception:  # noqa: BLE001
             logger.exception(
                 "CAAS_PLUGINS: failed to instantiate or register %r — skipping.",
                 entry,
             )
+            continue
+        logger.info("CAAS_PLUGINS: registered %r (priority %r).", entry, plugin.priority)
 
 
 def register_default_plugins(job_store, docker_client) -> None:

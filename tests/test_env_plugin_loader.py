@@ -2,7 +2,6 @@
 Tests for the CAAS_PLUGINS env-var loader in app.plugins._load_env_plugins.
 """
 import pytest
-import unittest.mock
 from unittest.mock import patch, MagicMock
 from app.core.plugin import CaasPlugin, PluginRegistry
 

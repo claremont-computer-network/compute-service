@@ -312,8 +312,14 @@
       }
     }
 
-    poll();
-    setInterval(poll, INTERVAL);
+    // Self-scheduling loop: next poll only fires after the current one finishes,
+    // preventing concurrent requests if the dispatcher is slow.
+    let _pollTimer = null;
+    async function scheduledPoll() {
+      await poll();
+      _pollTimer = setTimeout(scheduledPoll, INTERVAL);
+    }
+    scheduledPoll();
   </script>
 </body>
 </html>

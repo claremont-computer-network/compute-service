@@ -19,23 +19,24 @@ def test_ui_serves_index(api_client):
     assert b"CaaS" in resp.content
 
 
-def test_ui_mount_skipped_when_directory_absent(mock_docker_client, tmp_path):
-    """App imports cleanly and /ui is not mounted when ui/ does not exist."""
-    # Force a fresh import with a ui dir that doesn't exist
+def test_ui_mount_skipped_when_directory_absent(mock_docker_client):
+    """App imports cleanly and the 'ui' mount is absent when ui/ does not exist."""
+    # Force a fresh import so the conditional mount logic re-runs.
     for mod_name in list(sys.modules):
         if "app.main" in mod_name:
             del sys.modules[mod_name]
 
-    absent_dir = str(tmp_path / "no_such_ui_dir")
+    real_isdir = os.path.isdir
 
-    with patch("docker.from_env", return_value=mock_docker_client):
+    def fake_isdir(path):
+        if os.path.basename(os.path.normpath(path)) == "ui":
+            return False
+        return real_isdir(path)
+
+    with patch("docker.from_env", return_value=mock_docker_client), \
+         patch("os.path.isdir", side_effect=fake_isdir):
         import app.main as main_module
 
-        # Patch _ui_dir to a non-existent path and re-evaluate mount logic
-        # by checking that no route named "ui" was registered.
-        routes = {r.name for r in main_module.app.routes if hasattr(r, "name")}
-        # The mount is conditional — if ui/ happened to exist during import,
-        # skip this assertion; otherwise confirm the route is absent.
-        if not os.path.isdir(absent_dir):
-            # Import succeeded — app is healthy regardless of ui/ presence.
-            assert main_module.app is not None
+    routes = {r.name for r in main_module.app.routes if hasattr(r, "name")}
+    assert main_module.app is not None
+    assert "ui" not in routes

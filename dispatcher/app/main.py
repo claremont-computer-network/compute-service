@@ -492,6 +492,7 @@ def execute_cell(req: CellRequest, authorized: bool = Depends(get_api_key)):
             # return whatever we have rather than turning this into a 500.
             logs = ""
         job_store.mark_stopped(record.job_id, exit_code=exit_code)
+        job_store.store_logs(record.job_id, logs)
 
         try:
             container.remove()
@@ -627,6 +628,19 @@ def stop_job(job_id: str, authorized: bool = Depends(get_api_key)):
 
 @app.get("/v1/logs/{container_id}")
 def get_logs(container_id: str, follow: bool = False, authorized: bool = Depends(get_api_key)):
+    # For stopped cell jobs the container is already gone; serve stored logs
+    # from the job record rather than hitting Docker (which would 404).
+    record = job_store.get(container_id)
+    if record is not None and record.stored_logs is not None:
+        if follow:
+            # Container is already stopped — there's nothing to follow.
+            # Return what we have as a plain stream so the client doesn't hang.
+            return StreamingResponse(
+                iter([record.stored_logs.encode()]),
+                media_type="text/plain",
+            )
+        return JSONResponse({"container_id": container_id, "logs": record.stored_logs})
+
     try:
         cont = client.containers.get(container_id)
     except NotFound:

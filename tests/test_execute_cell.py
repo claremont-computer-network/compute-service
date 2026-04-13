@@ -241,3 +241,70 @@ def test_stop_cell_job_is_supported(api_client, mock_docker_client):
     # and then invoked stop() on the returned container object.
     mock_docker_client.containers.get.assert_called_with(job_id)
     container.stop.assert_called()
+
+
+# ── log storage ───────────────────────────────────────────────────────────────
+
+def test_cell_logs_stored_in_job_record(api_client, mock_docker_client):
+    """Logs captured at cell exit are stored in the job record's stored_logs field."""
+    container = mock_docker_client.containers.create.return_value
+    container.id = "storedlogstest001"
+    container.logs.return_value = b"Hello from cell\n"
+    api_client.post(CELL_URL, json={"code": "print('Hello from cell')", "image": "python:3.11-slim"})
+
+    import app.main as m
+    record = m.job_store.get("storedlogstest001")
+    assert record is not None
+    assert record.stored_logs == "Hello from cell\n"
+
+
+def test_cell_logs_truncated_at_256kib(api_client, mock_docker_client):
+    """Stored logs never exceed LOG_MAX_BYTES (strict cap including the marker)."""
+    from app.jobs import JobStore
+    container = mock_docker_client.containers.create.return_value
+    container.id = "storedlogstest002"
+    # Generate slightly over 256 KiB of output.
+    big_output = b"x" * (JobStore.LOG_MAX_BYTES + 1024)
+    container.logs.return_value = big_output
+    api_client.post(CELL_URL, json={"code": "pass", "image": "python:3.11-slim"})
+
+    import app.main as m
+    record = m.job_store.get("storedlogstest002")
+    assert record is not None
+    # The stored value must be strictly within the byte cap.
+    assert len(record.stored_logs.encode("utf-8")) <= JobStore.LOG_MAX_BYTES
+    assert "truncated" in record.stored_logs
+
+
+# ── job eviction ──────────────────────────────────────────────────────────────
+
+def test_job_store_evicts_oldest_stopped_when_full(api_client, mock_docker_client):
+    """When MAX_JOBS is reached, the oldest stopped jobs are evicted on the next register."""
+    from app.jobs import JobStore
+    import app.main as m
+
+    original_max = JobStore.MAX_JOBS
+    try:
+        # Lower the cap so we can test eviction without registering 500 jobs.
+        JobStore.MAX_JOBS = 3
+
+        ids = ["evicttest00a", "evicttest00b", "evicttest00c"]
+        for cid in ids:
+            container = mock_docker_client.containers.create.return_value
+            container.id = cid
+            api_client.post(CELL_URL, json={"code": "pass", "image": "python:3.11-slim"})
+
+        # All three stopped jobs are in the store.
+        assert m.job_store.get("evicttest00a") is not None
+        assert m.job_store.get("evicttest00b") is not None
+        assert m.job_store.get("evicttest00c") is not None
+
+        # Registering a fourth job must evict the oldest one (evicttest00a).
+        container = mock_docker_client.containers.create.return_value
+        container.id = "evicttest00d"
+        api_client.post(CELL_URL, json={"code": "pass", "image": "python:3.11-slim"})
+
+        assert m.job_store.get("evicttest00a") is None, "oldest job should have been evicted"
+        assert m.job_store.get("evicttest00d") is not None, "newest job must be present"
+    finally:
+        JobStore.MAX_JOBS = original_max

@@ -222,7 +222,7 @@ def test_cell_job_has_real_container_id(api_client, mock_docker_client):
 
 
 def test_stop_cell_job_is_supported(api_client, mock_docker_client):
-    """DELETE /v1/jobs/{id} must now succeed for cell jobs (docker-backed)."""
+    """DELETE /v1/jobs/{id} must succeed for cell jobs and actually stop the container."""
     container = mock_docker_client.containers.create.return_value
     container.id = "stoppablecell001"
     api_client.post(CELL_URL, json={"code": "pass", "image": "python:3.11-slim"})
@@ -231,5 +231,13 @@ def test_stop_cell_job_is_supported(api_client, mock_docker_client):
     assert len(jobs) == 1
     job_id = jobs[0]["job_id"]
 
+    # Wire containers.get so stop_job can retrieve the container.
+    mock_docker_client.containers.get.return_value = container
+
     resp = api_client.delete(f"/v1/jobs/{job_id}")
     assert resp.status_code == 200
+
+    # The stop path must have called containers.get with the real container ID
+    # and then invoked stop() on the returned container object.
+    mock_docker_client.containers.get.assert_called_with(job_id)
+    container.stop.assert_called()

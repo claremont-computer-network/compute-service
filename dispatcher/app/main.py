@@ -484,7 +484,13 @@ def execute_cell(req: CellRequest, authorized: bool = Depends(get_api_key)):
                 sampler.join(timeout=5)
 
         exit_code = result.get("StatusCode", -1)
-        logs = container.logs(stdout=True, stderr=True).decode(errors="replace")
+        try:
+            logs = container.logs(stdout=True, stderr=True).decode(errors="replace")
+        except (NotFound, DockerException):
+            # Container was removed (e.g. by a concurrent DELETE /v1/jobs/{id})
+            # between wait() returning and logs() being called.  Best-effort:
+            # return whatever we have rather than turning this into a 500.
+            logs = ""
         job_store.mark_stopped(record.job_id, exit_code=exit_code)
 
         try:
@@ -497,14 +503,24 @@ def execute_cell(req: CellRequest, authorized: bool = Depends(get_api_key)):
         return JSONResponse({"status": "exited", "exit_code": exit_code, "logs": logs})
     except HTTPException:
         raise
-    except DockerException as e:
+    except (NotFound, DockerException) as e:
+        # NotFound here means the container was removed externally while we
+        # were still waiting on it (e.g. a concurrent stop_job call).
+        # Treat it as a clean stop rather than a server error.
         if record is not None:
-            job_store.mark_stopped(record.job_id, exit_code=-1)
+            existing = job_store.get(record.job_id)
+            already_stopped = existing is not None and existing.status == "stopped"
+            if not already_stopped:
+                job_store.mark_stopped(record.job_id, exit_code=-1)
+            if isinstance(e, NotFound) and already_stopped:
+                return JSONResponse({"status": "stopped", "exit_code": existing.exit_code, "logs": ""})
         if container is not None:
             try:
                 container.remove(force=True)
             except DockerException:
                 pass
+        if isinstance(e, NotFound):
+            return JSONResponse({"status": "stopped", "exit_code": -1, "logs": ""})
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         resource_slots.release(resource)

@@ -34,18 +34,19 @@ class ResourceStats(BaseModel):
 
 class JobRecord(BaseModel):
     """Immutable identity fields plus mutable status for one dispatched job."""
-    job_id: str                                    # full container ID, or a UUID for non-container-backed jobs
-    container_id: str                              # full 64-char Docker container ID, or same UUID as job_id
-    docker_backed: bool = True                     # False for execute_cell jobs tracked by UUID only
+    job_id: str          # full 64-char Docker container ID
+    container_id: str    # same as job_id; kept separate for historical compat
+    docker_backed: bool = True  # always True; kept for forward-compatibility
     image: str
     cmd: t.Union[str, t.List[str], None] = None
     submitted_at: datetime
     status: str = "running"                        # running | stopped
     exit_code: t.Optional[int] = None
     resources: t.Optional[ResourceStats] = None   # populated on GET, not at submit
-    # Sampled resource history for synchronous cell jobs (docker_backed containers
-    # that complete before the next UI poll can capture live stats).
-    # Capped at 200 samples (~10 min at 3 s intervals) to bound memory usage.
+    # Sampled resource history collected by a background thread while the
+    # container is running.  Populated for execute_cell jobs (which complete
+    # before the UI can poll for live stats) but also useful for any job that
+    # finishes quickly.  Capped at 200 samples (~10 min at 3 s intervals).
     resource_history: t.List[ResourceStats] = Field(default_factory=list)
 
 

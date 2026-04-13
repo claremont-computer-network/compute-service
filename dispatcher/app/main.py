@@ -1,7 +1,9 @@
 import os
+import threading
 import typing as t
 import logging
 from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
 from fastapi import FastAPI, HTTPException, Header, Depends, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
@@ -30,6 +32,54 @@ except ValueError:
         _raw_max_shm,
     )
     MAX_SHM_SIZE_MB = 8192
+
+# ── Resource queue ────────────────────────────────────────────────────────────
+
+@dataclass
+class ResourceSlots:
+    """
+    Counting-semaphore pool keyed by resource name.
+
+    Each key maps to the number of concurrent slots allowed for that resource.
+    To add a new resource type (e.g. "tpu"), add it to ``from_env()`` — nothing
+    else in the codebase needs to change.
+    """
+    _slots: dict[str, threading.Semaphore] = field(default_factory=dict)
+
+    @classmethod
+    def from_env(cls) -> "ResourceSlots":
+        return cls(_slots={
+            "gpu": threading.Semaphore(int(os.getenv("MAX_CONCURRENT_GPU_JOBS", "1"))),
+            "cpu": threading.Semaphore(int(os.getenv("MAX_CONCURRENT_CPU_JOBS", "4"))),
+        })
+
+    def acquire(self, resource: str, timeout: int) -> bool:
+        """Attempt to acquire one slot for *resource*.  Returns True on success."""
+        sem = self._slots.get(resource)
+        if sem is None:
+            return True   # unknown resource → always allow (forward compat)
+        return sem.acquire(timeout=timeout)
+
+    def release(self, resource: str) -> None:
+        sem = self._slots.get(resource)
+        if sem is not None:
+            sem.release()
+
+
+QUEUE_TIMEOUT = int(os.getenv("QUEUE_TIMEOUT_SECS", "300"))
+resource_slots = ResourceSlots.from_env()
+
+
+def _acquire_slot(resource: str) -> None:
+    """Block until a slot is free, or raise 503 after QUEUE_TIMEOUT seconds."""
+    if not resource_slots.acquire(resource, timeout=QUEUE_TIMEOUT):
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"No {resource.upper()} slots available — all slots were busy for "
+                f"{QUEUE_TIMEOUT}s. Try again later."
+            ),
+        )
 
 
 @asynccontextmanager
@@ -264,6 +314,9 @@ def _prepare_run(req: ContainerOptions) -> dict:
 
 @app.post("/v1/execute")
 def execute(req: ExecuteRequest, authorized: bool = Depends(get_api_key)):
+    resource = "gpu" if req.gpu is not None else "cpu"
+    _acquire_slot(resource)
+    released = False
     try:
         run_kwargs = _prepare_run(req)
         run_kwargs["command"] = req.cmd
@@ -272,9 +325,13 @@ def execute(req: ExecuteRequest, authorized: bool = Depends(get_api_key)):
             run_kwargs["detach"] = True
             container = client.containers.run(req.image, **run_kwargs)
             record = job_store.register(container, image=req.image, cmd=req.cmd)
+            # Detached jobs run in the background; release the slot now so other
+            # submissions are not blocked by the container's full lifetime.
+            resource_slots.release(resource)
+            released = True
             return JSONResponse({"job_id": record.job_id, "container_id": container.id, "status": "running"})
 
-        # Blocking run — wait for completion and return logs inline.
+        # Blocking run — hold the slot for the full duration, then release in finally.
         run_kwargs["detach"] = False
         run_kwargs["remove"] = True
         try:
@@ -291,8 +348,13 @@ def execute(req: ExecuteRequest, authorized: bool = Depends(get_api_key)):
             body = _container_error_response(e, include_stdout=True)
             body["container_id"] = None
             return JSONResponse(body)
+    except HTTPException:
+        raise
     except DockerException as e:
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if not released:
+            resource_slots.release(resource)
 
 
 @app.post("/v1/execute/cell")
@@ -302,6 +364,8 @@ def execute_cell(req: CellRequest, authorized: bool = Depends(get_api_key)):
     Execution is always synchronous (detach=False, remove=True) — the response
     is returned only after the container exits.
     """
+    resource = "gpu" if req.gpu is not None else "cpu"
+    _acquire_slot(resource)
     try:
         run_kwargs = _prepare_run(req)
         run_kwargs["command"] = ["python", "-c", req.code]
@@ -318,8 +382,12 @@ def execute_cell(req: CellRequest, authorized: bool = Depends(get_api_key)):
         # User code exited non-zero — return logs rather than a 500 so the
         # client can display the traceback inline, just like a local cell.
         return JSONResponse(_container_error_response(e))
+    except HTTPException:
+        raise
     except DockerException as e:
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        resource_slots.release(resource)
 
 
 # ── Job registry ──────────────────────────────────────────────────────────────

@@ -202,9 +202,12 @@ class JobStore:
                 limit_display = f"{self.LOG_MAX_BYTES} bytes"
             marker = f"\n[... truncated: output exceeded {limit_display} ...]"
             marker_bytes = marker.encode("utf-8")
-            payload_max = max(0, self.LOG_MAX_BYTES - len(marker_bytes))
-            truncated = encoded[:payload_max].decode("utf-8", errors="ignore")
-            logs = truncated + marker
+            if len(marker_bytes) >= self.LOG_MAX_BYTES:
+                logs = marker_bytes[:self.LOG_MAX_BYTES].decode("utf-8", errors="ignore")
+            else:
+                payload_max = self.LOG_MAX_BYTES - len(marker_bytes)
+                truncated = encoded[:payload_max].decode("utf-8", errors="ignore")
+                logs = truncated + marker
         with self._lock:
             if job_id in self._jobs:
                 self._jobs[job_id].stored_logs = logs

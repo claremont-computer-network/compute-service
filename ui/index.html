@@ -253,12 +253,21 @@
     // Elapsed duration since submitted_at as a compact string.
     // For stopped jobs, duration is frozen at stop time (we don't have a
     // stopped_at field yet, so we use the last known elapsed from history).
+    // Returns "—" for missing, epoch (dispatcher hydrate sentinel), or
+    // implausibly large timestamps (> 30 days) to avoid multi-year displays.
+    const _EPOCH_MS      = new Date("1970-01-01T00:00:00Z").getTime();
+    const _MAX_ELAPSED_S = 30 * 24 * 3600; // 30 days — anything older is "unknown"
+
     function duration(iso, jobId) {
       if (!iso) return "—";
       const h = _history[jobId];
       // For stopped jobs use the frozen elapsed stored when we saw the stop.
       if (h && h.stoppedElapsed != null) return fmtElapsed(h.stoppedElapsed);
-      const secs = Math.floor((Date.now() - new Date(iso)) / 1000);
+      const ts = new Date(iso).getTime();
+      // Treat epoch (dispatcher hydrate sentinel) or unparseable dates as unknown.
+      if (!isFinite(ts) || ts <= _EPOCH_MS) return "—";
+      const secs = Math.floor((Date.now() - ts) / 1000);
+      if (secs < 0 || secs > _MAX_ELAPSED_S) return "—";
       return fmtElapsed(secs);
     }
 
@@ -413,6 +422,12 @@
     // For cell jobs (docker_backed=false): shows stored logs from job record.
     const _openLogs = new Set(); // job IDs currently expanded
 
+    // Cache of fetched log text keyed by job_id.
+    // Stopped jobs: cached forever (logs are immutable once the container exits).
+    // Running jobs: cached until the job stops so repeated polls don't re-fetch.
+    // Value is the resolved log string, or null while a fetch is in flight.
+    const _logCache = {};
+
     async function fetchLogs(job) {
       if (!job.docker_backed) {
         // Cell job — logs were returned inline in execute_cell response and
@@ -432,6 +447,30 @@
         return data.logs ?? "(no output)";
       } catch (e) {
         throw e;
+      }
+    }
+
+    // Populate a log panel <pre> for jobId.
+    // Uses cache if available; otherwise fetches and populates the cache.
+    async function populateLogPanel(logRow, job) {
+      const cached = _logCache[job.job_id];
+      if (cached !== undefined && cached !== null) {
+        const pre = logRow.querySelector("pre");
+        if (pre) { pre.className = ""; pre.textContent = cached; pre.scrollTop = pre.scrollHeight; }
+        return;
+      }
+      // Mark in-flight with null so a second concurrent call doesn't double-fetch.
+      _logCache[job.job_id] = null;
+      try {
+        const text = await fetchLogs(job);
+        _logCache[job.job_id] = text;
+        const pre = logRow.querySelector("pre");
+        if (pre) { pre.className = ""; pre.textContent = text; pre.scrollTop = pre.scrollHeight; }
+      } catch (e) {
+        // Don't cache errors — allow retry on next toggle.
+        delete _logCache[job.job_id];
+        const pre = logRow.querySelector("pre");
+        if (pre) { pre.className = "log-error"; pre.textContent = `Error loading logs: ${e.message}`; }
       }
     }
 
@@ -457,22 +496,29 @@
         <pre class="log-loading">Loading logs…</pre>
       </div></td>`;
       jobRow.insertAdjacentElement("afterend", logRow);
+      await populateLogPanel(logRow, job);
+    }
 
-      try {
-        const text = await fetchLogs(job);
-        const pre = logRow.querySelector("pre");
-        if (pre) {
-          pre.className = "";
-          pre.textContent = text;
-          // Scroll to bottom of log output.
-          pre.scrollTop = pre.scrollHeight;
-        }
-      } catch (e) {
-        const pre = logRow.querySelector("pre");
-        if (pre) {
-          pre.className = "log-error";
-          pre.textContent = `Error loading logs: ${e.message}`;
-        }
+    // Re-insert open log rows after the table is re-rendered by poll().
+    // Uses the cache — no extra HTTP requests unless the job is still running.
+    function restoreLogRows() {
+      for (const jobId of _openLogs) {
+        if (document.getElementById(`log-row-${jobId}`)) continue;
+        const jobRow = document.querySelector(`tr.job-row[data-job-id="${CSS.escape(jobId)}"]`);
+        if (!jobRow) continue;
+
+        const logRow = document.createElement("tr");
+        logRow.className = "log-row";
+        logRow.id = `log-row-${jobId}`;
+        logRow.innerHTML = `<td colspan="10"><div class="log-panel">
+          <pre class="log-loading">Loading logs…</pre>
+        </div></td>`;
+        jobRow.insertAdjacentElement("afterend", logRow);
+
+        const job = _jobMap[jobId] ?? { job_id: jobId, docker_backed: true };
+        // For running jobs, invalidate the cache on each poll so logs stay fresh.
+        if (job.status === "running") delete _logCache[jobId];
+        populateLogPanel(logRow, job);
       }
     }
 
@@ -586,32 +632,8 @@
           });
           body.innerHTML = jobs.map(renderRow).join("");
 
-          // Re-insert any open log rows below their job rows.
-          for (const jobId of _openLogs) {
-            if (!document.getElementById(`log-row-${jobId}`)) {
-              // Row was re-rendered and log panel was lost — re-expand silently.
-              // We only restore the panel structure; logs are re-fetched.
-              const jobRow = document.querySelector(`tr.job-row[data-job-id="${CSS.escape(jobId)}"]`);
-              if (jobRow) {
-                const logRow = document.createElement("tr");
-                logRow.className = "log-row";
-                logRow.id = `log-row-${jobId}`;
-                logRow.innerHTML = `<td colspan="10"><div class="log-panel">
-                  <pre class="log-loading">Loading logs…</pre>
-                </div></td>`;
-                jobRow.insertAdjacentElement("afterend", logRow);
-                fetchLogs(_jobMap[jobId] ?? { job_id: jobId, docker_backed: true })
-                  .then(text => {
-                    const pre = logRow.querySelector("pre");
-                    if (pre) { pre.className = ""; pre.textContent = text; pre.scrollTop = pre.scrollHeight; }
-                  })
-                  .catch(e => {
-                    const pre = logRow.querySelector("pre");
-                    if (pre) { pre.className = "log-error"; pre.textContent = `Error: ${e.message}`; }
-                  });
-              }
-            }
-          }
+          // Re-insert open log panels without re-fetching (uses cache).
+          restoreLogRows();
         }
 
         // Draw sparklines after the DOM is updated.

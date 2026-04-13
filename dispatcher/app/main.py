@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from fastapi import FastAPI, HTTPException, Header, Depends, Request
 from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 import docker
 from docker.errors import DockerException, NotFound, ContainerError
@@ -146,6 +147,11 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Compute Service Dispatcher", lifespan=lifespan)
+
+# Serve the static web UI at /ui  (no new API endpoints — reads /v1/jobs)
+_ui_dir = os.path.join(os.path.dirname(__file__), "..", "..", "ui")
+if os.path.isdir(_ui_dir):
+    app.mount("/ui", StaticFiles(directory=_ui_dir, html=True), name="ui")
 
 client = docker.from_env()
 job_store = JobStore()

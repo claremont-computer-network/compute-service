@@ -11,10 +11,10 @@ defines a comma-separated allow-list of host paths.  Any ``host_path``
 that is not equal to, or a sub-path of, one of the allowed directories is
 rejected with HTTP 400.
 
-This plugin also resolves each ``host_path`` to its absolute, normalised
-form (via ``os.path.abspath``) and builds the ``volumes`` dict that the
-Docker SDK expects.  The resolved bindings are injected into
-*create_kwargs* in-place.
+This plugin also resolves each ``host_path`` to its canonical form via
+:func:`pathlib.Path.resolve` (``strict=False``), which follows symlinks and
+normalises the path, preventing symlink-escape attacks and trailing-slash
+mismatches.  The resolved bindings are injected into *create_kwargs* in-place.
 
 Environment variables
 ---------------------
@@ -69,6 +69,14 @@ class VolumePolicyPlugin(CaasPlugin):
         # Import main at call-time so tests can monkey-patch module attrs.
         import app.main as _main  # pylint: disable=import-outside-toplevel
 
+        # Pre-compute canonicalized allow-list roots once per request so we
+        # don't call Path.resolve() O(n*m) times across volumes × allowed dirs.
+        allowed_roots = [
+            str(Path(p).resolve(strict=False))
+            for p in _main.ALLOWED_HOST_DIRS
+            if p
+        ]
+
         bindings: dict[str, dict] = {}
         for v in volumes:
             # resolve() follows symlinks and normalises the path, preventing
@@ -82,17 +90,19 @@ class VolumePolicyPlugin(CaasPlugin):
                     status_code=400,
                     detail=f"Cannot resolve host path {v.host_path!r}: {exc}",
                 )
-            # Canonicalize the allow-list roots the same way.
             allowed = any(
-                hp == str(Path(p).resolve(strict=False))
-                or hp.startswith(str(Path(p).resolve(strict=False)) + os.sep)
-                for p in _main.ALLOWED_HOST_DIRS
-                if p
+                hp == root or hp.startswith(root + os.sep)
+                for root in allowed_roots
             )
             if not allowed:
                 raise HTTPException(
                     status_code=400,
                     detail=f"Host path not allowed: {hp}",
+                )
+            if hp in bindings:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Multiple requested volumes resolve to the same host path: {hp}",
                 )
             bindings[hp] = {"bind": v.container_path, "mode": v.mode}
 

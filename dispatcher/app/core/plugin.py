@@ -35,7 +35,10 @@ Extension hooks
 """
 from __future__ import annotations
 
+import logging
 import typing as t
+
+logger = logging.getLogger("caas.dispatcher")
 
 if t.TYPE_CHECKING:
     from app.jobs import JobRecord
@@ -97,7 +100,19 @@ class PluginRegistry:
         self._plugins: list[CaasPlugin] = []
 
     def register(self, plugin: CaasPlugin) -> None:
-        """Add *plugin* to the registry and re-sort by priority."""
+        """Add *plugin* to the registry and re-sort by priority.
+
+        Raises:
+            ValueError: If a plugin with the same :attr:`~CaasPlugin.name`
+                is already registered.  Names must be unique so that
+                ``/health`` output is unambiguous and double-execution of
+                hooks is impossible.
+        """
+        if any(existing.name == plugin.name for existing in self._plugins):
+            raise ValueError(
+                f"A plugin named {plugin.name!r} is already registered. "
+                "Use registry.clear() before re-registering or choose a unique name."
+            )
         self._plugins.append(plugin)
         self._plugins.sort(key=lambda p: p.priority)
 
@@ -110,19 +125,45 @@ class PluginRegistry:
         self._plugins.clear()
 
     def pre_create(self, req: t.Any, create_kwargs: dict) -> None:
-        """Invoke :meth:`~CaasPlugin.pre_create` on every registered plugin."""
+        """Invoke :meth:`~CaasPlugin.pre_create` on every registered plugin.
+
+        Exceptions propagate — this hook is where validation plugins raise
+        ``HTTPException`` to reject invalid requests, so errors must not be
+        swallowed.
+        """
         for plugin in self._plugins:
             plugin.pre_create(req, create_kwargs)
 
     def post_run(self, record: "JobRecord", result: dict) -> None:
-        """Invoke :meth:`~CaasPlugin.post_run` on every registered plugin."""
+        """Invoke :meth:`~CaasPlugin.post_run` on every registered plugin.
+
+        Exceptions from individual plugins are caught, logged, and skipped so
+        that a buggy third-party plugin cannot turn a successful run into a 500.
+        """
         for plugin in self._plugins:
-            plugin.post_run(record, result)
+            try:
+                plugin.post_run(record, result)
+            except Exception:  # noqa: BLE001
+                logger.exception(
+                    "Plugin %r raised an unhandled exception in post_run(); skipping.",
+                    plugin.name,
+                )
 
     def on_register(self, record: "JobRecord") -> None:
-        """Invoke :meth:`~CaasPlugin.on_register` on every registered plugin."""
+        """Invoke :meth:`~CaasPlugin.on_register` on every registered plugin.
+
+        Exceptions from individual plugins are caught, logged, and skipped so
+        that a buggy third-party plugin cannot prevent job registration from
+        completing.
+        """
         for plugin in self._plugins:
-            plugin.on_register(record)
+            try:
+                plugin.on_register(record)
+            except Exception:  # noqa: BLE001
+                logger.exception(
+                    "Plugin %r raised an unhandled exception in on_register(); skipping.",
+                    plugin.name,
+                )
 
     def names(self) -> list[str]:
         """Return plugin names in priority order (useful for ``/health``)."""

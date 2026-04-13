@@ -3,21 +3,22 @@ dispatcher/app/plugins/__init__.py
 ────────────────────────────────────
 Built-in plugin registration.
 
-``register_default_plugins`` is called once during the FastAPI lifespan
-startup to wire all built-in plugins into the global registry.  The order
-of ``registry.register()`` calls is irrelevant — plugins are sorted by
-``priority`` inside :class:`~app.core.plugin.PluginRegistry`.
+``register_default_plugins`` is called at ``app.main`` module import time
+(after ``client`` and ``job_store`` are created) so that plugins are active
+even when the FastAPI lifespan context manager is not entered — which is the
+case during tests that use a bare :class:`starlette.testclient.TestClient`
+without a ``with`` block.  The lifespan also logs the active plugin list.
 
 Community plugin authors
 ------------------------
 To add a plugin without modifying this file, call
-``registry.register(YourPlugin())`` from your own startup code (e.g. a
-FastAPI lifespan middleware or an environment-variable-controlled loader)::
+``registry.register(YourPlugin())`` from your own startup code after
+``app.main`` has been imported::
 
     from app.core.plugin import registry
     from my_package.plugins import InstalledPackageReporterPlugin
 
-    registry.register(InstalledPackageReporterPlugin(job_store, docker_client))
+    registry.register(InstalledPackageReporterPlugin())
 """
 from app.core.plugin import registry
 from app.plugins.nvidia import NvidiaEntrypointPlugin

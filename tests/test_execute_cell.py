@@ -67,6 +67,37 @@ def test_cell_execute_forwards_gpu(api_client, mock_docker_client):
     assert dr[0].count == -1
 
 
+def test_cell_execute_nvcr_image_bypasses_entrypoint(api_client, mock_docker_client):
+    """suppress_entrypoint=true passes entrypoint='' to containers.create()."""
+    api_client.post(CELL_URL, json={
+        "code": "print('hi')",
+        "image": "nvcr.io/nvidia/pytorch:25.03-py3",
+        "suppress_entrypoint": True,
+    })
+    call_kwargs = mock_docker_client.containers.create.call_args
+    assert call_kwargs.kwargs.get("entrypoint") == ""
+
+
+def test_cell_execute_suppress_entrypoint_off_by_default(api_client, mock_docker_client):
+    """entrypoint is NOT overridden when suppress_entrypoint is omitted (default False)."""
+    api_client.post(CELL_URL, json={
+        "code": "print('hi')",
+        "image": "nvcr.io/nvidia/pytorch:25.03-py3",
+    })
+    call_kwargs = mock_docker_client.containers.create.call_args
+    assert "entrypoint" not in call_kwargs.kwargs
+
+
+def test_cell_execute_non_nvcr_image_keeps_default_entrypoint(api_client, mock_docker_client):
+    """Non-NGC images must not have their entrypoint overridden."""
+    api_client.post(CELL_URL, json={
+        "code": "print('hi')",
+        "image": "python:3.11-slim",
+    })
+    call_kwargs = mock_docker_client.containers.create.call_args
+    assert "entrypoint" not in call_kwargs.kwargs
+
+
 def test_cell_execute_forwards_env(api_client, mock_docker_client):
     """Environment variables are forwarded to the container."""
     api_client.post(CELL_URL, json={

@@ -78,6 +78,11 @@ def _parse_line(line: str) -> argparse.Namespace:
     parser.add_argument("--verbose", action="store_true", default=False,
                         help="Include stderr (container banner, pip warnings) in output. "
                              "Always enabled when the job exits non-zero.")
+    parser.add_argument("--suppress-entrypoint", dest="suppress_entrypoint",
+                        action=argparse.BooleanOptionalAction, default=None,
+                        help="Override the container ENTRYPOINT with '' so the image's "
+                             "startup script is skipped.  Auto-enabled for nvcr.io/* images. "
+                             "Use --no-suppress-entrypoint to disable the auto-detection.")
     # unknown args are silently ignored so custom flags don't break the magic
     ns, _ = parser.parse_known_args(shlex.split(line))
     return ns

@@ -108,10 +108,62 @@ job = client.execute(
     image="python:3.12-slim",
     cmd=["python", "-c", "import time; time.sleep(5); print('done')"],
 )
+job_id = job["job_id"]
 container_id = job["container_id"]
 ...
 print(client.logs(container_id))
 ```
+
+**Job with a bind-mount:**
+
+```python
+result = client.execute(
+    image="python:3.12-slim",
+    cmd=["python", "/inputs/process.py"],
+    volumes=[{"host_path": "/mnt/datasets", "container_path": "/inputs", "mode": "ro"}],
+    detach=False,
+)
+```
+
+---
+
+### `jobs() → list`
+
+Return all jobs currently tracked by the dispatcher (running and recently stopped).
+
+```python
+all_jobs = client.jobs()
+for j in all_jobs:
+    print(j["job_id"], j["status"], j.get("resources"))
+```
+
+---
+
+### `job(job_id) → dict`
+
+Get a single job by ID.
+
+```python
+j = client.job("a3f8d0e12b9c")
+print(j["status"])      # "running" or "stopped"
+print(j["exit_code"])   # None while running, integer once stopped
+print(j["resources"])   # {"cpu_percent": ..., "mem_usage_mib": ...} or None
+```
+
+Raises `CaasError` with HTTP 404 if the job ID is unknown.
+
+---
+
+### `stop(job_id) → dict`
+
+Stop a running job by ID.
+
+```python
+client.stop("a3f8d0e12b9c")
+# {"job_id": "a3f8d0e12b9c", "status": "stopped"}
+```
+
+Raises `CaasError` with HTTP 404 if the job ID is unknown, or HTTP 409 if the job has already stopped.
 
 ---
 

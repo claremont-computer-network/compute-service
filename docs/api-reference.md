@@ -23,6 +23,9 @@ Requests without a valid key return HTTP 401. If `DISPATCHER_API_KEY` is unset o
 | `GET` | `/health` | Liveness check |
 | `POST` | `/v1/execute` | Submit a container job |
 | `POST` | `/v1/execute/cell` | Run a Python code string and return output |
+| `GET` | `/v1/jobs` | List all tracked jobs |
+| `GET` | `/v1/jobs/{job_id}` | Get a single job by ID |
+| `DELETE` | `/v1/jobs/{job_id}` | Stop and remove a job |
 | `GET` | `/v1/logs/{container_id}` | Fetch logs for a detached job |
 
 ---
@@ -58,8 +61,9 @@ Submit a container job. Jobs can run synchronously (blocking until exit) or deta
 
 ```json
 {
-  "status": "running",
-  "container_id": "a3f8d0e12b9c"
+  "job_id": "a3f8d0e12b9c1234",
+  "container_id": "a3f8d0e12b9c",
+  "status": "running"
 }
 ```
 
@@ -134,6 +138,64 @@ curl -X POST http://192.168.1.50:8000/v1/execute/cell \
 
 ---
 
+### `GET /v1/jobs`
+
+Return all jobs that the dispatcher currently knows about (running and recently stopped).
+Jobs are tracked in memory and hydrated from Docker on startup; restarting the dispatcher
+clears the in-memory store, but containers that are still running are re-discovered automatically.
+
+**Response**
+
+```json
+{
+  "jobs": [
+    {
+      "job_id": "a3f8d0e12b9c",
+      "container_id": "a3f8d0e12b9cdeadbeef",
+      "image": "python:3.12-slim",
+      "cmd": ["python", "-c", "print('hello')"],
+      "status": "running",
+      "submitted_at": "2026-04-12T10:00:00",
+      "exit_code": null,
+      "resources": {
+        "cpu_percent": 12.4,
+        "mem_usage_mib": 48.1,
+        "mem_limit_mib": 32768.0,
+        "mem_percent": 0.15
+      }
+    }
+  ]
+}
+```
+
+The `resources` field is populated for running containers only; it is `null` for stopped jobs.
+
+---
+
+### `GET /v1/jobs/{job_id}`
+
+Get a single job by ID.
+
+**Response** — same shape as an element of the `"jobs"` array above.
+
+Returns HTTP 404 if the job ID is unknown.
+
+---
+
+### `DELETE /v1/jobs/{job_id}`
+
+Stop a running job. Sends `SIGKILL` to the container and marks it as `stopped`.
+
+**Response**
+
+```json
+{"job_id": "a3f8d0e12b9c", "status": "stopped"}
+```
+
+Returns HTTP 404 if the job ID is unknown. Returns HTTP 409 if the job has already stopped.
+
+---
+
 ### `GET /v1/logs/{container_id}`
 
 Fetch logs for a detached job.
@@ -196,8 +258,11 @@ curl "http://192.168.1.50:8000/v1/logs/a3f8d0e12b9c?follow=true" \
 |-------------|---------|
 | `400` | Bad request — e.g. volume path not in `ALLOWED_HOST_DIRS` |
 | `401` | Missing or invalid `X-API-Key` |
+| `404` | Job ID not found |
+| `409` | Job already stopped |
 | `422` | Validation error — request body fails schema checks |
 | `500` | Dispatcher-side error — Docker daemon unreachable, image pull failed, etc. |
+| `503` | No resource slots available — all GPU or CPU slots were busy for the full `QUEUE_TIMEOUT_SECS` window. Retry after a running job finishes. |
 
 Error bodies follow FastAPI's standard format:
 

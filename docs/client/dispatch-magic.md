@@ -77,6 +77,63 @@ import torch
 print([torch.cuda.get_device_name(i) for i in range(torch.cuda.device_count())])
 ```
 
+### `--volume`
+
+Bind-mount a host directory into the container. Format: `HOST_PATH:CONTAINER_PATH[:MODE]`
+where `MODE` is `rw` (default) or `ro`. Repeat the flag for multiple mounts.
+
+The host path must be within `ALLOWED_HOST_DIRS` on the dispatcher — see [Configuration](../configuration.md).
+
+```python
+%%dispatch --image python:3.12-slim --volume /mnt/nas_data:/inputs:ro
+import os
+print(os.listdir("/inputs"))
+```
+
+```python
+# Mount an input read-only and an output directory read-write
+%%dispatch --image python:3.12-slim \
+    --volume /mnt/nas_data:/inputs:ro \
+    --volume /home/erik/results:/outputs
+import json, pathlib
+data = json.loads(pathlib.Path("/inputs/data.json").read_text())
+pathlib.Path("/outputs/result.json").write_text(json.dumps({"count": len(data)}))
+```
+
+!!! warning "Host path must be allowed"
+    If the dispatcher returns HTTP 400 with `"Host path not allowed"`, the path is not listed
+    in `ALLOWED_HOST_DIRS`. Ask the operator to add it, or use a path that is already allowed.
+
+### `--shm-size`
+
+Set the size of `/dev/shm` inside the container. Useful for PyTorch `DataLoader` with multiple
+workers, which uses shared memory for inter-process communication.
+
+```python
+%%dispatch --image pytorch/pytorch:2.3.0-cuda12.1-cudnn8-runtime --gpu all --shm-size 1g
+import torch
+loader = torch.utils.data.DataLoader(dataset, batch_size=64, num_workers=4)
+```
+
+### `--ipc`
+
+Set the IPC namespace. `--ipc host` shares the host IPC namespace, giving workers unlimited
+shared memory — an alternative to `--shm-size` for large PyTorch multi-GPU jobs.
+
+```python
+%%dispatch --image pytorch/pytorch:2.3.0-cuda12.1-cudnn8-runtime --gpu all --ipc host
+```
+
+### `--timeout`
+
+Override the HTTP read timeout (seconds) for this cell. Increase it for very long-running
+synchronous workloads. Default: 120 s.
+
+```python
+%%dispatch --image my-long-job:latest --timeout 3600
+# ... job that takes up to an hour
+```
+
 ---
 
 ## Behaviour
@@ -88,6 +145,7 @@ print([torch.cuda.get_device_name(i) for i in range(torch.cuda.device_count())])
 | **Exceptions** | A Python exception in the remote code prints the traceback inline. No error is raised in the notebook. |
 | **Exit code** | A non-zero exit code is printed as a warning below the output. |
 | **Image** | The image must have `python` available. Use a custom image for pre-installed packages. |
+| **Queue** | If all resource slots on the dispatcher are occupied, the magic will wait up to `QUEUE_TIMEOUT_SECS` (default 300 s). A `503` response means the queue was full for the entire timeout period. |
 
 ---
 
@@ -110,5 +168,7 @@ print([torch.cuda.get_device_name(i) for i in range(torch.cuda.device_count())])
 | `CAAS_HOST is not configured` | `register_magic()` was not called, or `CAAS_HOST` is unset |
 | `No image specified` | `CAAS_DEFAULT_IMAGE` is unset and no `--image` flag was given |
 | `Invalid --gpu value` | `--gpu` was given a non-empty value that is neither `all` nor a valid ID list |
+| HTTP 400 `Host path not allowed` | A `--volume` host path is not in `ALLOWED_HOST_DIRS` on the dispatcher |
+| HTTP 503 `No GPU/CPU slots available` | All resource slots were busy for `QUEUE_TIMEOUT_SECS` — wait for a running job to finish |
 
 All of these are surfaced as a red error cell in the notebook so the problem is visible immediately.

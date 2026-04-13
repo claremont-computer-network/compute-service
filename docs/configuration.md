@@ -12,12 +12,20 @@ Stored in `dispatcher/.env` (loaded automatically by Docker Compose and by `pyth
 |----------|----------|-------------|
 | `DISPATCHER_API_KEY` | No | Secret key required in the `X-API-Key` request header. If unset or empty, the dispatcher accepts all requests without authentication — only acceptable on a trusted private network. |
 | `ALLOWED_HOST_DIRS` | No | Comma-separated list of absolute host paths that jobs may bind-mount. Requests referencing paths outside this list are rejected with HTTP 400. If unset, no bind-mounts are allowed. |
+| `ALLOW_IPC_HOST` | No | Set to `true` to permit `ipc_mode=host` (shares the host IPC namespace). Required for PyTorch `DataLoader` workers using shared memory beyond Docker's default. Default: `false`. |
+| `MAX_SHM_SIZE_MB` | No | Maximum shared-memory segment size (MiB) callers may request via `shm_size`. Default: `8192`. |
+| `MAX_CONCURRENT_GPU_JOBS` | No | Maximum number of GPU jobs that can run simultaneously. Additional submissions wait up to `QUEUE_TIMEOUT_SECS` before receiving HTTP 503. Default: `1`. |
+| `MAX_CONCURRENT_CPU_JOBS` | No | Maximum number of CPU (non-GPU) jobs that can run simultaneously. Default: `4`. |
+| `QUEUE_TIMEOUT_SECS` | No | How long (seconds) a job submission will wait for a free resource slot before the dispatcher returns HTTP 503. Set to `0` for fail-fast behaviour. Default: `300`. |
 
 **Example `dispatcher/.env`:**
 
 ```bash
 DISPATCHER_API_KEY=a-strong-random-secret-here
 ALLOWED_HOST_DIRS=/home/eriksson/data,/mnt/datasets
+MAX_CONCURRENT_GPU_JOBS=1
+MAX_CONCURRENT_CPU_JOBS=4
+QUEUE_TIMEOUT_SECS=300
 ```
 
 !!! tip "Empty string vs unset"

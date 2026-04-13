@@ -377,7 +377,7 @@ def execute_cell(req: CellRequest, authorized: bool = Depends(get_api_key)):
         _ensure_image(req.image)
 
         container = client.containers.create(req.image, **create_kwargs)
-        record = job_store.register(container, image=req.image, cmd=cmd)
+        record = job_store.register(container, image=req.image, cmd=cmd, job_type="cell")
 
         # Plugins react to registration (e.g. ResourceSamplerPlugin starts thread).
         registry.on_register(record)

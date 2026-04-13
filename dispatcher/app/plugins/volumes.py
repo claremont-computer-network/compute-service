@@ -102,6 +102,10 @@ class VolumePolicyPlugin(CaasPlugin):
                     status_code=400,
                     detail=f"Host path not allowed: {hp}",
                 )
+            # Reject duplicate resolved host paths explicitly rather than
+            # silently overwriting — two entries for the same host path with
+            # different container_path/mode values indicate a caller bug, and
+            # silent overwrites would produce non-deterministic mounts.
             if hp in bindings:
                 raise HTTPException(
                     status_code=400,

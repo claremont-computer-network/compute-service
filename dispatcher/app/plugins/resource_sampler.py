@@ -78,11 +78,15 @@ class ResourceSamplerPlugin(CaasPlugin):
 
     @staticmethod
     def _is_cell_job(record: "JobRecord") -> bool:
-        """Return True when *record* represents a cell execution job."""
-        cmd = record.cmd
-        if isinstance(cmd, list) and len(cmd) >= 2:
-            return cmd[0] == "python" and cmd[1] == "-c"
-        return False
+        """Return True when *record* was registered with ``job_type="cell"``.
+
+        Using the explicit ``job_type`` field (set by ``execute_cell`` via
+        ``job_store.register(..., job_type="cell")``) is more reliable than
+        inspecting the command: a detached ``/v1/execute`` job could also use
+        ``["python", "-c", ...]`` as its command, and those jobs never trigger
+        ``post_run``, so cmd-based heuristics can mis-classify them.
+        """
+        return getattr(record, "job_type", "detached") == "cell"
 
     def on_register(self, record: "JobRecord") -> None:
         """Start a background sampling thread for cell jobs only."""

@@ -88,20 +88,18 @@ class ShmIpcPolicyPlugin(CaasPlugin):
             suffix = raw[-1] if raw[-1] in _SHM_SUFFIXES else "b"
             number_part = raw[:-1] if raw[-1] in _SHM_SUFFIXES else raw
             try:
-                # Require a whole-number value — fractional bytes are nonsensical
-                # and floats can mask typos like "1.5g".
-                size_int = int(number_part)
+                size_value = float(number_part)
             except ValueError:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Cannot parse shm_size: {shm_size!r}. Expected a whole-number value like '512m' or '2g'.",
+                    detail=f"Cannot parse shm_size: {shm_size!r}. Expected a value like '512m' or '2g'.",
                 )
-            if size_int <= 0:
+            if size_value <= 0:
                 raise HTTPException(
                     status_code=400,
                     detail=f"shm_size must be a positive value, got {shm_size!r}.",
                 )
-            size_bytes = size_int * _SHM_SUFFIXES[suffix]
+            size_bytes = size_value * _SHM_SUFFIXES[suffix]
             size_mb = size_bytes / (1024**2)
             if size_mb > _main.MAX_SHM_SIZE_MB:
                 raise HTTPException(

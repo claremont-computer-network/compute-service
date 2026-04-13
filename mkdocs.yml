@@ -68,3 +68,5 @@ nav:
       - Provisioning: operations/provisioning.md
       - Troubleshooting: operations/troubleshooting.md
       - Security: operations/security.md
+  - Extending:
+      - Plugin Guide: extending/plugin-guide.md

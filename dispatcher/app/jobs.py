@@ -43,6 +43,9 @@ class JobRecord(BaseModel):
     status: str = "running"                        # running | stopped
     exit_code: t.Optional[int] = None
     resources: t.Optional[ResourceStats] = None   # populated on GET, not at submit
+    # Sampled resource history for synchronous cell jobs (docker_backed containers
+    # that complete before the next UI poll can capture live stats).
+    resource_history: t.List[ResourceStats] = []
 
 
 def _fetch_resources(container) -> t.Optional[ResourceStats]:
@@ -148,6 +151,12 @@ class JobStore:
                 self._jobs[job_id].status = "stopped"
                 if exit_code is not None:
                     self._jobs[job_id].exit_code = exit_code
+
+    def append_resource_sample(self, job_id: str, sample: ResourceStats) -> None:
+        """Append one resource-stats sample collected during a running job."""
+        with self._lock:
+            if job_id in self._jobs:
+                self._jobs[job_id].resource_history.append(sample)
 
     # ── read ──────────────────────────────────────────────────────────────────
 

@@ -7,9 +7,22 @@ import docker.errors
 CELL_URL = "/v1/execute/cell"
 
 
+def _set_cell_logs(container, stdout: bytes = b"", stderr: bytes = b""):
+    """Configure the container mock to return specific stdout/stderr bytes."""
+    def _logs(stdout=True, stderr=True, **kwargs):  # noqa: F811
+        out = stdout_bytes if stdout else b""
+        err = stderr_bytes if stderr else b""
+        if stdout and stderr:
+            return out + err
+        return out if stdout else err
+    stdout_bytes = stdout
+    stderr_bytes = stderr
+    container.logs.side_effect = _logs
+
+
 def test_cell_execute_returns_logs(api_client, mock_docker_client):
-    """Valid code submission returns status=exited and logs inline."""
-    mock_docker_client.containers.create.return_value.logs.return_value = b"2\n"
+    """Valid code submission returns status=exited, stdout inline."""
+    _set_cell_logs(mock_docker_client.containers.create.return_value, stdout=b"2\n")
     resp = api_client.post(CELL_URL, json={
         "code": "x = 1 + 1\nprint(x)",
         "image": "python:3.11-slim",
@@ -18,6 +31,8 @@ def test_cell_execute_returns_logs(api_client, mock_docker_client):
     body = resp.json()
     assert body["status"] == "exited"
     assert body["exit_code"] == 0
+    assert body["stdout"] == "2\n"
+    assert body["stderr"] == ""
     assert body["logs"] == "2\n"
 
 
@@ -46,7 +61,7 @@ def test_cell_execute_is_docker_backed(api_client, mock_docker_client):
 
 def test_cell_execute_forwards_gpu(api_client, mock_docker_client):
     """GPU device_requests are forwarded when gpu field is set."""
-    mock_docker_client.containers.create.return_value.logs.return_value = b"Tesla T4\n"
+    _set_cell_logs(mock_docker_client.containers.create.return_value, stdout=b"Tesla T4\n")
     resp = api_client.post(CELL_URL, json={
         "code": "import torch; print(torch.cuda.get_device_name(0))",
         "image": "pytorch/pytorch:latest",
@@ -89,13 +104,15 @@ def test_cell_execute_nonzero_exit_returns_logs(api_client, mock_docker_client):
     """User code that exits non-zero returns 200 with logs, not a 500."""
     container = mock_docker_client.containers.create.return_value
     container.wait.return_value = {"StatusCode": 1}
-    container.logs.return_value = b"Traceback (most recent call last):\nNameError: name 'x' is not defined\n"
+    _set_cell_logs(container,
+                   stderr=b"Traceback (most recent call last):\nNameError: name 'x' is not defined\n")
     resp = api_client.post(CELL_URL, json={"code": "print(x)", "image": "python:3.11-slim"})
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "exited"
     assert body["exit_code"] == 1
     assert "NameError" in body["logs"]
+    assert "NameError" in body["stderr"]
 
 
 def test_cell_execute_missing_image_returns_422(api_client, mock_docker_client):
@@ -182,7 +199,7 @@ def test_cell_job_registered_and_stopped_on_success(api_client, mock_docker_clie
     container = mock_docker_client.containers.create.return_value
     container.id = "celljob000001"
     container.wait.return_value = {"StatusCode": 0}
-    container.logs.return_value = b"ok\n"
+    _set_cell_logs(container, stdout=b"ok\n")
     api_client.post(CELL_URL, json={"code": "print('ok')", "image": "python:3.11-slim"})
 
     jobs = api_client.get("/v1/jobs").json()
@@ -198,7 +215,7 @@ def test_cell_job_stopped_with_nonzero_exit_on_container_error(api_client, mock_
     container = mock_docker_client.containers.create.return_value
     container.id = "celljob000002"
     container.wait.return_value = {"StatusCode": 2}
-    container.logs.return_value = b"SyntaxError\n"
+    _set_cell_logs(container, stderr=b"SyntaxError\n")
     api_client.post(CELL_URL, json={"code": "def f(", "image": "python:3.11-slim"})
 
     jobs = api_client.get("/v1/jobs").json()
@@ -249,7 +266,7 @@ def test_cell_logs_stored_in_job_record(api_client, mock_docker_client):
     """Logs captured at cell exit are stored in the job record's stored_logs field."""
     container = mock_docker_client.containers.create.return_value
     container.id = "storedlogstest001"
-    container.logs.return_value = b"Hello from cell\n"
+    _set_cell_logs(container, stdout=b"Hello from cell\n")
     api_client.post(CELL_URL, json={"code": "print('Hello from cell')", "image": "python:3.11-slim"})
 
     import app.main as m
@@ -265,7 +282,7 @@ def test_cell_logs_truncated_at_256kib(api_client, mock_docker_client):
     container.id = "storedlogstest002"
     # Generate slightly over 256 KiB of output.
     big_output = b"x" * (JobStore.LOG_MAX_BYTES + 1024)
-    container.logs.return_value = big_output
+    _set_cell_logs(container, stdout=big_output)
     api_client.post(CELL_URL, json={"code": "pass", "image": "python:3.11-slim"})
 
     import app.main as m

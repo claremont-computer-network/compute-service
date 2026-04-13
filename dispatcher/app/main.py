@@ -485,12 +485,20 @@ def execute_cell(req: CellRequest, authorized: bool = Depends(get_api_key)):
 
         exit_code = result.get("StatusCode", -1)
         try:
-            logs = container.logs(stdout=True, stderr=True).decode(errors="replace")
+            # Capture stdout and stderr separately so the client can choose
+            # whether to display container-entrypoint noise (stderr) or just
+            # the user's print() output (stdout).  Both streams are stored
+            # for the logs endpoint; "logs" is kept as the merged stream for
+            # backward compatibility with callers that read only that field.
+            stdout = container.logs(stdout=True, stderr=False).decode(errors="replace")
+            stderr = container.logs(stdout=False, stderr=True).decode(errors="replace")
         except (NotFound, DockerException):
             # Container was removed (e.g. by a concurrent DELETE /v1/jobs/{id})
             # between wait() returning and logs() being called.  Best-effort:
             # return whatever we have rather than turning this into a 500.
-            logs = ""
+            stdout = ""
+            stderr = ""
+        logs = stdout + stderr  # merged — used for stored_logs and legacy "logs" field
         job_store.mark_stopped(record.job_id, exit_code=exit_code)
         job_store.store_logs(record.job_id, logs)
 
@@ -501,7 +509,13 @@ def execute_cell(req: CellRequest, authorized: bool = Depends(get_api_key)):
         except DockerException:
             pass  # best-effort; container already gone
 
-        return JSONResponse({"status": "exited", "exit_code": exit_code, "logs": logs})
+        return JSONResponse({
+            "status": "exited",
+            "exit_code": exit_code,
+            "stdout": stdout,
+            "stderr": stderr,
+            "logs": logs,   # backward compat: merged stdout+stderr
+        })
     except HTTPException:
         raise
     except (NotFound, DockerException) as e:
@@ -514,14 +528,14 @@ def execute_cell(req: CellRequest, authorized: bool = Depends(get_api_key)):
             if not already_stopped:
                 job_store.mark_stopped(record.job_id, exit_code=-1)
             if isinstance(e, NotFound) and already_stopped:
-                return JSONResponse({"status": "stopped", "exit_code": existing.exit_code, "logs": ""})
+                return JSONResponse({"status": "stopped", "exit_code": existing.exit_code, "stdout": "", "stderr": "", "logs": ""})
         if container is not None:
             try:
                 container.remove(force=True)
             except DockerException:
                 pass
         if isinstance(e, NotFound):
-            return JSONResponse({"status": "stopped", "exit_code": -1, "logs": ""})
+            return JSONResponse({"status": "stopped", "exit_code": -1, "stdout": "", "stderr": "", "logs": ""})
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         resource_slots.release(resource)

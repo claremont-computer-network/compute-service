@@ -36,7 +36,16 @@ def make_docker_client() -> MagicMock:
     container.attrs = {"Config": {"Cmd": None}, "State": {"ExitCode": 0}}
     container.status = "running"
     container.reload.return_value = None  # container.reload() is a no-op in tests
-    container.logs.return_value = b"hello from container\n"
+    # logs() is called separately for stdout and stderr by execute_cell.
+    # Default: stdout has content, stderr is empty (no banner noise in tests).
+    def _logs(stdout=True, stderr=True, **kwargs):
+        out = b"hello from container\n" if stdout else b""
+        err = b""                        if stderr else b""
+        # when both are requested (legacy path / detached jobs) return merged
+        if stdout and stderr:
+            return out
+        return out if stdout else err
+    container.logs.side_effect = _logs
     # stats raises by default — _fetch_resources returns None gracefully.
     # Tests that need live stats should set container.stats.return_value explicitly.
     container.stats.side_effect = Exception("no stats in tests by default")

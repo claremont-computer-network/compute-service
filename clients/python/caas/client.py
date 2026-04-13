@@ -155,15 +155,28 @@ class CaasClient:
         gpu: t.Optional[dict] = None,
         shm_size: t.Optional[str] = None,
         ipc_mode: t.Optional[str] = None,
+        verbose: bool = False,
     ) -> str:
-        """Send a Python code string to /v1/execute/cell. Returns the logs."""
+        """Send a Python code string to /v1/execute/cell. Returns the output.
+
+        By default only stdout is returned so container-entrypoint banner noise
+        (NVIDIA copyright, pip deprecation warnings, etc.) is suppressed — those
+        all go to stderr and are not part of the user's code output.
+
+        Pass verbose=True to get stdout + stderr merged, which is useful when
+        debugging or when the job exits non-zero.
+        """
         payload = self._compact(
             code=code, image=image, env=env or None, volumes=volumes or None,
             gpu=gpu, shm_size=shm_size, ipc_mode=ipc_mode,
         )
         resp = self._call("POST", f"{self._base}/v1/execute/cell",
                           json=payload, headers=self._headers())
-        return self._check(resp).json()["logs"]
+        body = self._check(resp).json()
+        if verbose or body.get("exit_code", 0) != 0:
+            # On failure always include stderr so tracebacks are visible.
+            return body.get("logs", "")
+        return body.get("stdout", body.get("logs", ""))
 
     def logs(self, container_id: str, follow: bool = False) -> str:
         """Fetch logs for a detached container.

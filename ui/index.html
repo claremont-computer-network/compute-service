@@ -271,10 +271,14 @@
         } catch (e) {
           alert(`Error: ${e.message}`);
         }
-        // Restart the scheduled loop immediately rather than calling poll()
-        // directly — keeps the single-in-flight guarantee intact.
-        if (_pollTimer !== null) clearTimeout(_pollTimer);
-        scheduledPoll();
+        // Request an immediate refresh. If a poll is already in flight,
+        // set a flag so the loop fires again as soon as it finishes rather
+        // than starting a second concurrent request.
+        _refreshRequested = true;
+        if (!_inFlight && _pollTimer !== null) {
+          clearTimeout(_pollTimer);
+          scheduledPoll();
+        }
       }
     }
 
@@ -314,12 +318,27 @@
       }
     }
 
-    // Self-scheduling loop: next poll only fires after the current one finishes,
-    // preventing concurrent requests if the dispatcher is slow.
-    let _pollTimer = null;
+    // Single-in-flight scheduler.
+    // _inFlight: true while a poll() promise is pending.
+    // _refreshRequested: set by handleAction to trigger an extra poll
+    //   immediately after the current one finishes rather than waiting
+    //   for the normal interval.
+    let _pollTimer        = null;
+    let _inFlight         = false;
+    let _refreshRequested = false;
+
     async function scheduledPoll() {
-      await poll();
-      _pollTimer = setTimeout(scheduledPoll, INTERVAL);
+      _inFlight = true;
+      _refreshRequested = false;
+      try {
+        await poll();
+      } finally {
+        _inFlight = false;
+      }
+      // If an action requested a refresh while we were in flight, fire
+      // immediately; otherwise wait for the normal interval.
+      const delay = _refreshRequested ? 0 : INTERVAL;
+      _pollTimer = setTimeout(scheduledPoll, delay);
     }
     scheduledPoll();
   </script>

@@ -9,10 +9,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt ./
+COPY dispatcher/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY app ./app
+COPY dispatcher/app ./app
+COPY ui ./app/ui
 
 # Run as a non-root user – reduces blast radius if the app is compromised
 RUN addgroup --system caas && adduser --system --ingroup caas caas

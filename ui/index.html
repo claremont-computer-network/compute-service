@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CaaS — Job Monitor</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: ui-monospace, "Cascadia Code", "Fira Code", monospace;
+      background: #0d1117;
+      color: #e6edf3;
+      padding: 2rem;
+      font-size: 14px;
+    }
+
+    header {
+      display: flex;
+      align-items: baseline;
+      gap: 1.5rem;
+      margin-bottom: 1.5rem;
+      border-bottom: 1px solid #21262d;
+      padding-bottom: 1rem;
+    }
+
+    header h1 { font-size: 1.1rem; color: #58a6ff; }
+
+    #status {
+      font-size: 0.75rem;
+      color: #8b949e;
+    }
+
+    #status.error { color: #f85149; }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    thead th {
+      text-align: left;
+      padding: 0.5rem 0.75rem;
+      color: #8b949e;
+      font-weight: 500;
+      border-bottom: 1px solid #21262d;
+      white-space: nowrap;
+    }
+
+    tbody tr {
+      border-bottom: 1px solid #161b22;
+      transition: background 0.1s;
+    }
+
+    tbody tr:hover { background: #161b22; }
+
+    td {
+      padding: 0.5rem 0.75rem;
+      vertical-align: middle;
+      white-space: nowrap;
+    }
+
+    .job-id {
+      color: #8b949e;
+      font-size: 0.8rem;
+      letter-spacing: 0.02em;
+    }
+
+    .image { color: #79c0ff; }
+
+    .cmd {
+      color: #8b949e;
+      max-width: 260px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 0.15rem 0.55rem;
+      border-radius: 2em;
+      font-size: 0.72rem;
+      font-weight: 600;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+    }
+
+    .badge-running { background: #1f4a1f; color: #3fb950; }
+    .badge-stopped { background: #1c2a3a; color: #58a6ff; }
+    .badge-failed  { background: #3d1c1c; color: #f85149; }
+    .badge-unknown { background: #21262d; color: #8b949e; }
+
+    .exit-ok   { color: #3fb950; }
+    .exit-fail { color: #f85149; }
+    .exit-null { color: #3d444d; }
+
+    .resource      { color: #d2a8ff; }
+    .resource-null { color: #3d444d; }
+
+    /* Action buttons — wired to DELETE /v1/jobs/{id}, disabled when not running */
+    .actions button {
+      background: none;
+      border: 1px solid #30363d;
+      color: #8b949e;
+      border-radius: 4px;
+      padding: 0.2rem 0.5rem;
+      font-size: 0.72rem;
+      cursor: pointer;
+      font-family: inherit;
+      transition: border-color 0.1s, color 0.1s;
+    }
+
+    .actions button:not([disabled]):hover {
+      border-color: #f85149;
+      color: #f85149;
+    }
+
+    .actions button[disabled] {
+      opacity: 0.25;
+      cursor: default;
+    }
+
+    #empty {
+      text-align: center;
+      padding: 3rem;
+      color: #3d444d;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>⚡ CaaS Job Monitor</h1>
+    <span id="status">connecting…</span>
+  </header>
+
+  <table id="job-table">
+    <thead>
+      <tr>
+        <th>Job ID</th>
+        <th>Image</th>
+        <th>Command</th>
+        <th>Status</th>
+        <th>Submitted</th>
+        <th>CPU %</th>
+        <th>Memory</th>
+        <th>Exit</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody id="job-body">
+      <tr id="empty"><td colspan="9">No jobs yet.</td></tr>
+    </tbody>
+  </table>
+
+  <script>
+    // ── config ────────────────────────────────────────────────────────────────
+    const INTERVAL = 3000; // poll interval in ms
+
+    // ── api key ───────────────────────────────────────────────────────────────
+    // Key is stored in sessionStorage so it is never embedded in the HTML source.
+    // On first load the user is prompted once; leave blank for open deployments.
+    const _KEY_STORE    = "caas-ui-api-key";
+    const _KEY_PROMPTED = "caas-ui-api-key-prompted";
+
+    function getApiKey() {
+      const stored = sessionStorage.getItem(_KEY_STORE);
+      if (stored !== null) return stored;
+      if (sessionStorage.getItem(_KEY_PROMPTED) === "true") return "";
+      const entered = window.prompt(
+        "Enter X-API-Key (leave blank for unauthenticated access):", ""
+      ) ?? "";
+      sessionStorage.setItem(_KEY_PROMPTED, "true");
+      if (entered) sessionStorage.setItem(_KEY_STORE, entered);
+      return entered;
+    }
+
+    // ── helpers ───────────────────────────────────────────────────────────────
+    function authHeaders() {
+      const h = { "Accept": "application/json" };
+      const key = getApiKey();
+      if (key) h["X-API-Key"] = key;
+      return h;
+    }
+
+    // Escape a value for safe insertion into HTML text / attribute contexts.
+    function esc(str) {
+      return String(str ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function relativeTime(iso) {
+      if (!iso) return "—";
+      const diff = Math.floor((Date.now() - new Date(iso)) / 1000);
+      if (diff <  60)   return `${diff}s ago`;
+      if (diff < 3600)  return `${Math.floor(diff / 60)}m ago`;
+      return `${Math.floor(diff / 3600)}h ago`;
+    }
+
+    function badge(status) {
+      const cls = { running: "badge-running", stopped: "badge-stopped",
+                    failed:  "badge-failed"  }[status] ?? "badge-unknown";
+      return `<span class="badge ${cls}">${esc(status ?? "unknown")}</span>`;
+    }
+
+    function exitCell(code) {
+      if (code === null || code === undefined)
+        return `<span class="exit-null">—</span>`;
+      return code === 0
+        ? `<span class="exit-ok">0</span>`
+        : `<span class="exit-fail">${code}</span>`;
+    }
+
+    function resourceCell(val, unit, decimals = 1) {
+      if (val === null || val === undefined)
+        return `<span class="resource-null">—</span>`;
+      return `<span class="resource">${val.toFixed(decimals)}${unit}</span>`;
+    }
+
+    // ── render ────────────────────────────────────────────────────────────────
+    // To add more actions later (logs, restart, etc.) add a <button> here.
+    // Each button gets data-action and data-id; wire it up in handleAction().
+    function renderRow(job) {
+      const shortId = esc((job.job_id ?? "?").slice(0, 12));
+      const fullId  = esc(job.job_id ?? "?");
+      // cmd can be a string, an array, or null (API schema: Union[str, List[str], None])
+      const cmdStr  = Array.isArray(job.cmd)
+        ? job.cmd.join(" ")
+        : (typeof job.cmd === "string" ? job.cmd : "");
+      const cmd     = esc(cmdStr);
+      const image   = esc(job.image ?? "?");
+      const res     = job.resources ?? {};
+      const running = job.status === "running";
+
+      return `
+        <tr data-job-id="${fullId}">
+          <td class="job-id" title="${fullId}">${shortId}</td>
+          <td class="image">${image}</td>
+          <td class="cmd" title="${cmd}">${cmd}</td>
+          <td>${badge(job.status)}</td>
+          <td>${relativeTime(job.submitted_at)}</td>
+          <td>${resourceCell(res.cpu_percent,   "%",    1)}</td>
+          <td>${resourceCell(res.mem_usage_mib, " MiB", 0)}</td>
+          <td>${exitCell(job.exit_code)}</td>
+          <td class="actions">
+            <button data-action="stop" data-id="${fullId}"
+                    title="Stop job" ${running ? "" : "disabled"}>
+              stop
+            </button>
+          </td>
+        </tr>`;
+    }
+
+    // ── actions ───────────────────────────────────────────────────────────────
+    // Calls DELETE /v1/jobs/{id} — the only existing mutating endpoint.
+    // Add cases here when more actions are needed.
+    async function handleAction(action, jobId) {
+      if (action === "stop") {
+        if (!confirm(`Stop job ${jobId.slice(0, 12)}?`)) return;
+        try {
+          const resp = await fetch(`/v1/jobs/${jobId}`, {
+            method: "DELETE",
+            headers: authHeaders(),
+          });
+          if (!resp.ok) {
+            const err = await resp.json().catch(() => ({}));
+            alert(`Failed to stop job: ${err.detail ?? resp.status}`);
+          }
+        } catch (e) {
+          alert(`Error: ${e.message}`);
+        }
+        // Request an immediate refresh. If a poll is already in flight,
+        // set a flag so the loop fires again as soon as it finishes rather
+        // than starting a second concurrent request.
+        _refreshRequested = true;
+        if (!_inFlight && _pollTimer !== null) {
+          clearTimeout(_pollTimer);
+          scheduledPoll();
+        }
+      }
+    }
+
+    document.getElementById("job-body").addEventListener("click", e => {
+      const btn = e.target.closest("button[data-action]");
+      if (!btn || btn.disabled) return;
+      handleAction(btn.dataset.action, btn.dataset.id);
+    });
+
+    // ── poll ──────────────────────────────────────────────────────────────────
+    async function poll() {
+      try {
+        const resp = await fetch("/v1/jobs", { headers: authHeaders() });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const jobs = await resp.json();
+
+        const body = document.getElementById("job-body");
+        if (!jobs.length) {
+          body.innerHTML = `<tr id="empty"><td colspan="9">No jobs yet.</td></tr>`;
+        } else {
+          // running jobs first, then most-recently submitted
+          jobs.sort((a, b) => {
+            if (a.status === "running" && b.status !== "running") return -1;
+            if (b.status === "running" && a.status !== "running") return  1;
+            return new Date(b.submitted_at) - new Date(a.submitted_at);
+          });
+          body.innerHTML = jobs.map(renderRow).join("");
+        }
+
+        const el = document.getElementById("status");
+        el.textContent = `updated ${new Date().toLocaleTimeString()} · ${jobs.length} job${jobs.length !== 1 ? "s" : ""}`;
+        el.className = "";
+      } catch (err) {
+        const el = document.getElementById("status");
+        el.textContent = `error: ${err.message}`;
+        el.className = "error";
+      }
+    }
+
+    // Single-in-flight scheduler.
+    // _inFlight: true while a poll() promise is pending.
+    // _refreshRequested: set by handleAction to trigger an extra poll
+    //   immediately after the current one finishes rather than waiting
+    //   for the normal interval.
+    let _pollTimer        = null;
+    let _inFlight         = false;
+    let _refreshRequested = false;
+
+    async function scheduledPoll() {
+      _inFlight = true;
+      _refreshRequested = false;
+      try {
+        await poll();
+      } finally {
+        _inFlight = false;
+      }
+      // If an action requested a refresh while we were in flight, fire
+      // immediately; otherwise wait for the normal interval.
+      const delay = _refreshRequested ? 0 : INTERVAL;
+      _pollTimer = setTimeout(scheduledPoll, delay);
+    }
+    scheduledPoll();
+  </script>
+</body>
+</html>

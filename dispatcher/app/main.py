@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from fastapi import FastAPI, HTTPException, Header, Depends, Request
 from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 import docker
 from docker.errors import DockerException, NotFound, ContainerError
@@ -146,6 +147,37 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Compute Service Dispatcher", lifespan=lifespan)
+
+# Serve the static web UI at /ui (no new API endpoints — uses existing job APIs,
+# including reading /v1/jobs and stopping jobs via DELETE /v1/jobs/{id}).
+def _resolve_ui_dir() -> t.Optional[str]:
+    """Return the first existing ui/ directory, or None if none is found.
+
+    Search order:
+      1. DISPATCHER_UI_DIR env var (explicit override)
+      2. Two levels above this file (repo-root ui/ — dev layout)
+      3. Alongside this file (dispatcher/app/ui/ — container layout)
+    """
+    candidates: list[str] = []
+    configured = os.getenv("DISPATCHER_UI_DIR")
+    if configured:
+        candidates.append(configured)
+    candidates.append(os.path.join(os.path.dirname(__file__), "..", "..", "ui"))
+    candidates.append(os.path.join(os.path.dirname(__file__), "ui"))
+    for candidate in candidates:
+        if os.path.isdir(candidate):
+            return candidate
+    if configured:
+        logger.warning(
+            "DISPATCHER_UI_DIR=%r does not point to an existing directory; "
+            "the /ui route will not be mounted.",
+            configured,
+        )
+    return None
+
+_ui_dir = _resolve_ui_dir()
+if _ui_dir is not None:
+    app.mount("/ui", StaticFiles(directory=_ui_dir, html=True), name="ui")
 
 client = docker.from_env()
 job_store = JobStore()

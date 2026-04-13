@@ -1,7 +1,8 @@
 services:
   dispatcher:
     build:
-      context: .
+      context: ..
+      dockerfile: dispatcher/Dockerfile
     image: compute-service/dispatcher:latest
     container_name: caas-dispatcher
     ports:

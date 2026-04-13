@@ -24,8 +24,9 @@ def test_ui_mount_skipped_when_directory_absent(mock_docker_client):
         if "app.main" in mod_name:
             del sys.modules[mod_name]
 
-    # Patch os.path.isdir inside the app.main module so _resolve_ui_dir()
-    # returns None during import — before the StaticFiles mount decision runs.
+    # Patch os.path.isdir globally before importing app.main so
+    # _resolve_ui_dir() returns None during import, before the StaticFiles
+    # mount decision runs.
     with patch("docker.from_env", return_value=mock_docker_client), \
          patch("os.path.isdir", return_value=False):
         import app.main as main_module

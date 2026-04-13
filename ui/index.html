@@ -154,16 +154,41 @@
 
   <script>
     // ── config ────────────────────────────────────────────────────────────────
-    // API_KEY: set this if your dispatcher requires X-API-Key authentication.
-    // Leave empty for unauthenticated deployments.
-    const API_KEY  = "";
     const INTERVAL = 3000; // poll interval in ms
+
+    // ── api key ───────────────────────────────────────────────────────────────
+    // Key is stored in sessionStorage so it is never embedded in the HTML source.
+    // On first load the user is prompted once; leave blank for open deployments.
+    const _KEY_STORE    = "caas-ui-api-key";
+    const _KEY_PROMPTED = "caas-ui-api-key-prompted";
+
+    function getApiKey() {
+      const stored = sessionStorage.getItem(_KEY_STORE);
+      if (stored !== null) return stored;
+      if (sessionStorage.getItem(_KEY_PROMPTED) === "true") return "";
+      const entered = window.prompt(
+        "Enter X-API-Key (leave blank for unauthenticated access):", ""
+      ) ?? "";
+      sessionStorage.setItem(_KEY_PROMPTED, "true");
+      if (entered) sessionStorage.setItem(_KEY_STORE, entered);
+      return entered;
+    }
 
     // ── helpers ───────────────────────────────────────────────────────────────
     function authHeaders() {
       const h = { "Accept": "application/json" };
-      if (API_KEY) h["X-API-Key"] = API_KEY;
+      const key = getApiKey();
+      if (key) h["X-API-Key"] = key;
       return h;
+    }
+
+    // Escape a value for safe insertion into HTML text / attribute contexts.
+    function esc(str) {
+      return String(str ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
     }
 
     function relativeTime(iso) {
@@ -198,15 +223,21 @@
     // To add more actions later (logs, restart, etc.) add a <button> here.
     // Each button gets data-action and data-id; wire it up in handleAction().
     function renderRow(job) {
-      const shortId = (job.job_id ?? "?").slice(0, 12);
-      const cmd     = (job.cmd ?? []).join(" ");
+      const shortId = esc((job.job_id ?? "?").slice(0, 12));
+      const fullId  = esc(job.job_id ?? "?");
+      // cmd can be a string, an array, or null (API schema: Union[str, List[str], None])
+      const cmdStr  = Array.isArray(job.cmd)
+        ? job.cmd.join(" ")
+        : (typeof job.cmd === "string" ? job.cmd : "");
+      const cmd     = esc(cmdStr);
+      const image   = esc(job.image ?? "?");
       const res     = job.resources ?? {};
       const running = job.status === "running";
 
       return `
-        <tr data-job-id="${job.job_id}">
-          <td class="job-id" title="${job.job_id}">${shortId}</td>
-          <td class="image">${job.image ?? "?"}</td>
+        <tr data-job-id="${fullId}">
+          <td class="job-id" title="${fullId}">${shortId}</td>
+          <td class="image">${image}</td>
           <td class="cmd" title="${cmd}">${cmd}</td>
           <td>${badge(job.status)}</td>
           <td>${relativeTime(job.submitted_at)}</td>
@@ -214,7 +245,7 @@
           <td>${resourceCell(res.mem_usage_mib, " MiB", 0)}</td>
           <td>${exitCell(job.exit_code)}</td>
           <td class="actions">
-            <button data-action="stop" data-id="${job.job_id}"
+            <button data-action="stop" data-id="${fullId}"
                     title="Stop job" ${running ? "" : "disabled"}>
               stop
             </button>

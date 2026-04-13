@@ -202,7 +202,7 @@
     function badge(status) {
       const cls = { running: "badge-running", stopped: "badge-stopped",
                     failed:  "badge-failed"  }[status] ?? "badge-unknown";
-      return `<span class="badge ${cls}">${status ?? "unknown"}</span>`;
+      return `<span class="badge ${cls}">${esc(status ?? "unknown")}</span>`;
     }
 
     function exitCell(code) {
@@ -271,8 +271,10 @@
         } catch (e) {
           alert(`Error: ${e.message}`);
         }
-        // poll immediately so the row updates without waiting for the interval
-        poll();
+        // Restart the scheduled loop immediately rather than calling poll()
+        // directly — keeps the single-in-flight guarantee intact.
+        if (_pollTimer !== null) clearTimeout(_pollTimer);
+        scheduledPoll();
       }
     }
 

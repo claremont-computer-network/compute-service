@@ -43,7 +43,7 @@ _config: dict = {
 # Args consumed by the magic itself; the rest are forwarded verbatim to execute_cell().
 # Adding a new --flag: add to _parse_line() with dest= matching the execute_cell()
 # kwarg name. Only add to this set if the arg is NOT a container option.
-_MAGIC_META_ARGS: frozenset[str] = frozenset({"image", "gpu", "timeout", "volumes", "verbose", "suppress_entrypoint"})
+_MAGIC_META_ARGS: frozenset[str] = frozenset({"image", "gpu", "timeout", "volumes", "verbose"})
 
 
 def _get_ipython():
@@ -150,9 +150,7 @@ def _dispatch_magic(line: str, cell: str) -> None:
     client = _make_client(timeout=timeout)
     try:
         logs = client.execute_cell(code=cell, image=image, gpu=gpu, volumes=volumes,
-                                   verbose=args.verbose,
-                                   suppress_entrypoint=args.suppress_entrypoint,
-                                   **opts)
+                                   verbose=args.verbose, **opts)
     except CaasTimeoutError as exc:
         raise CaasMagicError(str(exc)) from exc
     except CaasError as exc:

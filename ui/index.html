@@ -53,7 +53,8 @@
       cursor: pointer;
     }
 
-    tbody tr.job-row:hover { background: #161b22; }
+    tbody tr.job-row:hover  { background: #161b22; }
+    tbody tr.job-row:focus  { outline: 2px solid #58a6ff; outline-offset: -2px; background: #161b22; }
 
     tbody tr.log-row td {
       padding: 0;
@@ -395,7 +396,7 @@
         }
       }
 
-      const nullCls = cur === null && !(h && h.peakMem) ? " null" : "";
+      const nullCls = cur === null && h?.peakMem == null ? " null" : "";
 
       return `<div class="spark-cell">
         <canvas width="${SPARK_W}" height="${SPARK_H}"
@@ -415,7 +416,7 @@
         const color = kind === "cpu" ? "#d2a8ff" : "#79c0ff";
         // For memory, scale to the peak so the chart doesn't reset when usage
         // drops at the end.
-        const maxVal = kind === "mem" && h.peakMem ? h.peakMem * 1.05 : 0;
+        const maxVal = kind === "mem" && h.peakMem != null ? h.peakMem * 1.05 : 0;
         drawSparkline(canvas, arr, color, maxVal);
       });
     }
@@ -428,9 +429,14 @@
 
     // Cache of fetched log text keyed by job_id.
     // Stopped jobs: cached forever (logs are immutable once the container exits).
-    // Running jobs: cached until the job stops so repeated polls don't re-fetch.
-    // Value is the resolved log string, or null while a fetch is in flight.
+    // Running jobs: cache is invalidated at most once per LOG_REFRESH_INTERVAL ms
+    //   so open panels stay reasonably fresh without re-fetching every poll.
+    // Value is either the resolved log string, or an in-flight Promise that
+    // resolves to that string while a fetch is pending.
     const _logCache = {};
+    const LOG_REFRESH_INTERVAL = 15_000; // ms between log refreshes for running jobs
+    // _logLastFetch[job_id] = timestamp of the last fetch start for running jobs.
+    const _logLastFetch = {};
 
     async function fetchLogs(job) {
       if (!job.docker_backed) {
@@ -511,6 +517,7 @@
       if (_openLogs.has(jobId)) {
         // Collapse
         _openLogs.delete(jobId);
+        jobRow.setAttribute("aria-expanded", "false");
         const existing = document.getElementById(`log-row-${CSS.escape(jobId)}`);
         if (existing) existing.remove();
         return;
@@ -518,6 +525,7 @@
 
       // Expand
       _openLogs.add(jobId);
+      jobRow.setAttribute("aria-expanded", "true");
       const logRow = document.createElement("tr");
       logRow.className = "log-row";
       logRow.id = `log-row-${jobId}`;
@@ -529,7 +537,8 @@
     }
 
     // Re-insert open log rows after the table is re-rendered by poll().
-    // Uses the cache — no extra HTTP requests unless the job is still running.
+    // Uses the cache — no extra HTTP requests unless the job is still running
+    // and LOG_REFRESH_INTERVAL ms have elapsed since the last fetch.
     function restoreLogRows() {
       for (const jobId of _openLogs) {
         if (document.getElementById(`log-row-${jobId}`)) continue;
@@ -543,10 +552,18 @@
           <pre class="log-loading">Loading logs…</pre>
         </div></td>`;
         jobRow.insertAdjacentElement("afterend", logRow);
+        jobRow.setAttribute("aria-expanded", "true");
 
         const job = _jobMap[jobId] ?? { job_id: jobId, docker_backed: true };
-        // For running jobs, invalidate the cache on each poll so logs stay fresh.
-        if (job.status === "running") delete _logCache[jobId];
+        // For running jobs, only invalidate the cache if enough time has passed
+        // since the last fetch — avoids re-downloading full logs every 3s poll.
+        if (job.status === "running") {
+          const last = _logLastFetch[jobId] ?? 0;
+          if (Date.now() - last >= LOG_REFRESH_INTERVAL) {
+            delete _logCache[jobId];
+            _logLastFetch[jobId] = Date.now();
+          }
+        }
         populateLogPanel(logRow, job);
       }
     }
@@ -565,7 +582,9 @@
       const running = job.status === "running";
 
       return `
-        <tr class="job-row" data-job-id="${fullId}">
+        <tr class="job-row" data-job-id="${fullId}"
+            tabindex="0" role="button" aria-expanded="false"
+            title="Click to toggle logs">
           <td class="job-id" title="${fullId}">${shortId}</td>
           <td class="image">${image}</td>
           <td class="cmd" title="${cmd}">${cmd}</td>
@@ -628,6 +647,16 @@
       }
     });
 
+    // Keyboard support: Enter or Space on a focused row toggles the log panel.
+    document.getElementById("job-body").addEventListener("keydown", e => {
+      if (e.key !== "Enter" && e.key !== " ") return;
+      const row = e.target.closest("tr.job-row");
+      if (!row) return;
+      e.preventDefault();
+      const jobId = row.dataset.jobId;
+      toggleLogs(jobId, _jobMap[jobId] ?? { job_id: jobId, docker_backed: true });
+    });
+
     // ── duration ticker ───────────────────────────────────────────────────────
     // Updates duration cells every second without a full re-render.
     setInterval(() => {
@@ -648,6 +677,14 @@
         // Accumulate history before rendering.
         jobs.forEach(recordHistory);
         _jobMap = Object.fromEntries(jobs.map(j => [j.job_id, j]));
+
+        // Prune client-side state for jobs no longer returned by the server
+        // to avoid unbounded memory growth in long-running sessions.
+        const liveIds = new Set(jobs.map(j => j.job_id));
+        for (const id of Object.keys(_history))     { if (!liveIds.has(id)) delete _history[id]; }
+        for (const id of Object.keys(_logCache))    { if (!liveIds.has(id)) delete _logCache[id]; }
+        for (const id of Object.keys(_logLastFetch)){ if (!liveIds.has(id)) delete _logLastFetch[id]; }
+        for (const id of _openLogs)                 { if (!liveIds.has(id)) _openLogs.delete(id); }
 
         const body = document.getElementById("job-body");
         if (!jobs.length) {

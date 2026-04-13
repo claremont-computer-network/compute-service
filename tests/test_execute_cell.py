@@ -190,7 +190,6 @@ def test_cell_validation_precedes_image_pull(api_client, mock_docker_client):
 
 def test_cell_job_registered_and_stopped_on_success(api_client, mock_docker_client):
     """A successful cell run appears in /v1/jobs as stopped with exit_code=0."""
-    import app.main as main_module
     mock_docker_client.containers.run.return_value = b"ok\n"
     api_client.post(CELL_URL, json={"code": "print('ok')", "image": "python:3.11-slim"})
 

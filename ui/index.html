@@ -469,13 +469,23 @@
     // The Promise itself is stored in _logCache while the fetch is in flight so
     // concurrent callers (e.g. restoreLogRows() racing with toggleLogs()) await
     // the same request rather than issuing a second one.
-    async function populateLogPanel(logRow, job) {
+
+    // Auto-scroll to the bottom of a log <pre> only when the user is already
+    // near the bottom (within 80px), so manual scrolling up is not disrupted
+    // on poll-driven refreshes. firstOpen=true bypasses the check on initial load.
+    function maybeScrollToBottom(pre, firstOpen = false) {
+      if (!pre) return;
+      const nearBottom = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 80;
+      if (firstOpen || nearBottom) pre.scrollTop = pre.scrollHeight;
+    }
+
+    async function populateLogPanel(logRow, job, firstOpen = false) {
       const cached = _logCache[job.job_id];
 
       // Already resolved — fill immediately.
       if (typeof cached === "string") {
         const pre = logRow.querySelector("pre");
-        if (pre) { pre.className = ""; pre.textContent = cached; pre.scrollTop = pre.scrollHeight; }
+        if (pre) { pre.className = ""; pre.textContent = cached; maybeScrollToBottom(pre, firstOpen); }
         return;
       }
 
@@ -484,7 +494,7 @@
         try {
           const text = await cached;
           const pre = logRow.querySelector("pre");
-          if (pre) { pre.className = ""; pre.textContent = text; pre.scrollTop = pre.scrollHeight; }
+          if (pre) { pre.className = ""; pre.textContent = text; maybeScrollToBottom(pre, firstOpen); }
         } catch (e) {
           const pre = logRow.querySelector("pre");
           if (pre) { pre.className = "log-error"; pre.textContent = `Error loading logs: ${e.message}`; }
@@ -508,7 +518,7 @@
       try {
         const text = await promise;
         const pre = logRow.querySelector("pre");
-        if (pre) { pre.className = ""; pre.textContent = text; pre.scrollTop = pre.scrollHeight; }
+        if (pre) { pre.className = ""; pre.textContent = text; maybeScrollToBottom(pre, firstOpen); }
       } catch (e) {
         const pre = logRow.querySelector("pre");
         if (pre) { pre.className = "log-error"; pre.textContent = `Error loading logs: ${e.message}`; }
@@ -539,7 +549,7 @@
         <pre class="log-loading">Loading logs…</pre>
       </div></td>`;
       jobRow.insertAdjacentElement("afterend", logRow);
-      await populateLogPanel(logRow, job);
+      await populateLogPanel(logRow, job, /* firstOpen */ true);
     }
 
     // Re-insert open log rows after the table is re-rendered by poll().
@@ -611,7 +621,7 @@
     }
 
     // ── actions ───────────────────────────────────────────────────────────────
-    async function handleAction(action, jobId, job) {
+    async function handleAction(action, jobId) {
       if (action === "stop") {
         if (!confirm(`Stop job ${jobId.slice(0, 12)}?`)) return;
         try {
@@ -642,7 +652,7 @@
       // Stop button — don't also trigger row expand.
       const btn = e.target.closest("button[data-action]");
       if (btn) {
-        if (!btn.disabled) handleAction(btn.dataset.action, btn.dataset.id, _jobMap[btn.dataset.id]);
+        if (!btn.disabled) handleAction(btn.dataset.action, btn.dataset.id);
         return;
       }
       // Row click — toggle logs.

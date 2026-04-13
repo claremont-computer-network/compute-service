@@ -143,6 +143,49 @@ def test_execute_cell_nonzero_exit_always_returns_merged_logs(client, mock_trans
     assert "ValueError" in result
 
 
+def test_execute_cell_nvcr_image_auto_enables_suppress_entrypoint(client, mock_transport):
+    """nvcr.io/* images get suppress_entrypoint=True automatically."""
+    _assert_payload(
+        mock_transport, "POST", f"{BASE_URL}/v1/execute/cell",
+        {"suppress_entrypoint": True},
+        response_body={"status": "exited", "exit_code": 0, "stdout": "ok\n", "logs": "ok\n"},
+    )
+    client.execute_cell(code="print('ok')", image="nvcr.io/nvidia/pytorch:25.03-py3")
+
+
+def test_execute_cell_non_nvcr_image_does_not_set_suppress_entrypoint(client, mock_transport):
+    """Non-NGC images must not send suppress_entrypoint in the payload."""
+    _assert_payload(
+        mock_transport, "POST", f"{BASE_URL}/v1/execute/cell",
+        {},   # we only care the key is absent — checked via the handler below
+        response_body={"status": "exited", "exit_code": 0, "stdout": "ok\n", "logs": "ok\n"},
+    )
+    # Override with a handler that actively asserts absence.
+    import json as _json
+    def _check(request):
+        body = _json.loads(request.content)
+        assert "suppress_entrypoint" not in body, (
+            f"suppress_entrypoint should not be sent for non-NGC images, got: {body}"
+        )
+        return _make_response(200, {"status": "exited", "exit_code": 0, "stdout": "ok\n", "logs": "ok\n"})
+    mock_transport[("POST", f"{BASE_URL}/v1/execute/cell")] = _check
+    client.execute_cell(code="print('ok')", image="python:3.11-slim")
+
+
+def test_execute_cell_suppress_entrypoint_false_overrides_auto(client, mock_transport):
+    """Explicit suppress_entrypoint=False disables auto-detection for nvcr.io images."""
+    import json as _json
+    def _check(request):
+        body = _json.loads(request.content)
+        assert "suppress_entrypoint" not in body, (
+            f"suppress_entrypoint should be omitted when False, got: {body}"
+        )
+        return _make_response(200, {"status": "exited", "exit_code": 0, "stdout": "ok\n", "logs": "ok\n"})
+    mock_transport[("POST", f"{BASE_URL}/v1/execute/cell")] = _check
+    client.execute_cell(code="print('ok')", image="nvcr.io/nvidia/pytorch:25.03-py3",
+                        suppress_entrypoint=False)
+
+
 def test_execute_cell_sends_code_and_image(client, mock_transport):
     _assert_payload(
         mock_transport, "POST", f"{BASE_URL}/v1/execute/cell",

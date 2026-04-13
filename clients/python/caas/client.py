@@ -156,6 +156,7 @@ class CaasClient:
         shm_size: t.Optional[str] = None,
         ipc_mode: t.Optional[str] = None,
         verbose: bool = False,
+        suppress_entrypoint: t.Optional[bool] = None,
     ) -> str:
         """Send a Python code string to /v1/execute/cell. Returns the output.
 
@@ -165,10 +166,20 @@ class CaasClient:
 
         Pass verbose=True to get stdout + stderr merged, which is useful when
         debugging or when the job exits non-zero.
+
+        suppress_entrypoint controls whether the container's ENTRYPOINT script
+        is bypassed entirely (entrypoint="").  If left as None (the default),
+        it is auto-enabled for nvcr.io/* images, which print a large banner to
+        stdout before exec-ing the user command.  Pass False explicitly to
+        disable the auto-detection (e.g. if you rely on the NGC entrypoint for
+        env-var setup).
         """
+        if suppress_entrypoint is None:
+            suppress_entrypoint = image.startswith("nvcr.io/")
         payload = self._compact(
             code=code, image=image, env=env or None, volumes=volumes or None,
             gpu=gpu, shm_size=shm_size, ipc_mode=ipc_mode,
+            suppress_entrypoint=suppress_entrypoint or None,
         )
         resp = self._call("POST", f"{self._base}/v1/execute/cell",
                           json=payload, headers=self._headers())

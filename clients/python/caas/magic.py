@@ -43,7 +43,7 @@ _config: dict = {
 # Args consumed by the magic itself; the rest are forwarded verbatim to execute_cell().
 # Adding a new --flag: add to _parse_line() with dest= matching the execute_cell()
 # kwarg name. Only add to this set if the arg is NOT a container option.
-_MAGIC_META_ARGS: frozenset[str] = frozenset({"image", "gpu", "timeout", "volumes", "verbose"})
+_MAGIC_META_ARGS: frozenset[str] = frozenset({"image", "gpu", "timeout", "volumes", "verbose", "suppress_entrypoint"})
 
 
 def _get_ipython():
@@ -78,6 +78,11 @@ def _parse_line(line: str) -> argparse.Namespace:
     parser.add_argument("--verbose", action="store_true", default=False,
                         help="Include stderr (container banner, pip warnings) in output. "
                              "Always enabled when the job exits non-zero.")
+    parser.add_argument("--suppress-entrypoint", dest="suppress_entrypoint",
+                        action=argparse.BooleanOptionalAction, default=None,
+                        help="Override the container ENTRYPOINT with '' so the image's "
+                             "startup script is skipped.  Auto-enabled for nvcr.io/* images. "
+                             "Use --no-suppress-entrypoint to disable the auto-detection.")
     # unknown args are silently ignored so custom flags don't break the magic
     ns, _ = parser.parse_known_args(shlex.split(line))
     return ns
@@ -145,7 +150,9 @@ def _dispatch_magic(line: str, cell: str) -> None:
     client = _make_client(timeout=timeout)
     try:
         logs = client.execute_cell(code=cell, image=image, gpu=gpu, volumes=volumes,
-                                   verbose=args.verbose, **opts)
+                                   verbose=args.verbose,
+                                   suppress_entrypoint=args.suppress_entrypoint,
+                                   **opts)
     except CaasTimeoutError as exc:
         raise CaasMagicError(str(exc)) from exc
     except CaasError as exc:

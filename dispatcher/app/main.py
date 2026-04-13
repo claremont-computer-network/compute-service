@@ -230,6 +230,15 @@ class CellRequest(ContainerOptions):
     Cell execution is always synchronous (detach is not supported).
     """
     code: str
+    suppress_entrypoint: bool = Field(
+        default=False,
+        description=(
+            "When True the container's entrypoint is overridden with an empty "
+            "string so the image's ENTRYPOINT script is skipped entirely.  "
+            "Useful for NVIDIA NGC images (nvcr.io/*) whose entrypoint prints "
+            "a multi-page banner to stdout before exec-ing the user command."
+        ),
+    )
 
 
 def get_api_key(x_api_key: t.Optional[str] = Header(None)):
@@ -458,11 +467,9 @@ def execute_cell(req: CellRequest, authorized: bool = Depends(get_api_key)):
         # meaningful for containers.run(detach=False)).  Strip them before
         # creating so we don't get a TypeError with docker-py >= 6.
         create_kwargs = {k: v for k, v in run_kwargs.items() if k not in ("stdout", "stderr")}
-        # NVIDIA NGC images (nvcr.io/*) run an entrypoint script that prints
-        # a multi-page banner to stdout before exec-ing the user command.
-        # Bypassing the entrypoint entirely gives clean output without any
-        # image modifications or env-var hacks.
-        if req.image.startswith("nvcr.io/"):
+        # Optionally bypass the image entrypoint so it doesn't pollute stdout.
+        # Clients can set this automatically for known noisy images (e.g. nvcr.io/*).
+        if req.suppress_entrypoint:
             create_kwargs.setdefault("entrypoint", "")
         # Create (but don't start) so we have a real container ID to register.
         container = client.containers.create(req.image, **create_kwargs)

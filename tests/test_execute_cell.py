@@ -68,13 +68,24 @@ def test_cell_execute_forwards_gpu(api_client, mock_docker_client):
 
 
 def test_cell_execute_nvcr_image_bypasses_entrypoint(api_client, mock_docker_client):
-    """NGC images (nvcr.io/*) get entrypoint='' so the banner script is skipped."""
+    """suppress_entrypoint=true passes entrypoint='' to containers.create()."""
+    api_client.post(CELL_URL, json={
+        "code": "print('hi')",
+        "image": "nvcr.io/nvidia/pytorch:25.03-py3",
+        "suppress_entrypoint": True,
+    })
+    call_kwargs = mock_docker_client.containers.create.call_args
+    assert call_kwargs.kwargs.get("entrypoint") == ""
+
+
+def test_cell_execute_suppress_entrypoint_off_by_default(api_client, mock_docker_client):
+    """entrypoint is NOT overridden when suppress_entrypoint is omitted (default False)."""
     api_client.post(CELL_URL, json={
         "code": "print('hi')",
         "image": "nvcr.io/nvidia/pytorch:25.03-py3",
     })
     call_kwargs = mock_docker_client.containers.create.call_args
-    assert call_kwargs.kwargs.get("entrypoint") == ""
+    assert "entrypoint" not in call_kwargs.kwargs
 
 
 def test_cell_execute_non_nvcr_image_keeps_default_entrypoint(api_client, mock_docker_client):

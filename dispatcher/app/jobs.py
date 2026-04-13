@@ -50,8 +50,10 @@ class JobRecord(BaseModel):
     resource_history: t.List[ResourceStats] = Field(default_factory=list)
     # Logs captured at container exit (execute_cell jobs only).  The container
     # is removed immediately after the cell runs, so this is the only way to
-    # serve logs after the fact.  Capped at LOG_STORE_MAX_BYTES before storing.
-    stored_logs: t.Optional[str] = None
+    # serve logs after the fact.  Capped at LOG_MAX_BYTES before storing.
+    # Excluded from model_dump() so job-list/detail responses never embed the
+    # full log payload; logs are served exclusively via GET /v1/logs/{id}.
+    stored_logs: t.Optional[str] = Field(default=None, exclude=True)
 
 
 def _fetch_resources(container) -> t.Optional[ResourceStats]:
@@ -111,10 +113,12 @@ class JobStore:
 
     Memory bounds
     ─────────────
-    MAX_JOBS        Hard cap on the number of job records kept.  When exceeded,
-                    the oldest stopped jobs are evicted first.  Running jobs are
-                    never evicted.
-    LOG_MAX_BYTES   Stored logs are truncated to this many bytes (UTF-8) before
+    MAX_JOBS        Best-effort bound on the number of job records kept.
+                    When exceeded, the oldest stopped jobs are evicted first.
+                    Running jobs are never evicted, so the store may remain
+                    above MAX_JOBS while many jobs are still active.
+    LOG_MAX_BYTES   Stored logs are truncated to strictly within this many
+                    bytes (UTF-8, including any truncation marker) before
                     being written into the record.  Prevents a single chatty
                     cell job from consuming large amounts of memory.
     """
@@ -187,13 +191,20 @@ class JobStore:
     def store_logs(self, job_id: str, logs: str) -> None:
         """Persist captured logs for a completed job (execute_cell path).
 
-        Truncates to LOG_MAX_BYTES so a single chatty job cannot dominate
-        memory.  A truncation marker is appended when the text is cut.
+        The stored value is guaranteed to be at most LOG_MAX_BYTES when
+        re-encoded as UTF-8 (including the truncation marker when cut).
         """
         encoded = logs.encode("utf-8")
         if len(encoded) > self.LOG_MAX_BYTES:
-            truncated = encoded[: self.LOG_MAX_BYTES].decode("utf-8", errors="replace")
-            logs = truncated + "\n[... truncated: output exceeded 256 KiB ...]"
+            if self.LOG_MAX_BYTES % 1024 == 0:
+                limit_display = f"{self.LOG_MAX_BYTES // 1024} KiB"
+            else:
+                limit_display = f"{self.LOG_MAX_BYTES} bytes"
+            marker = f"\n[... truncated: output exceeded {limit_display} ...]"
+            marker_bytes = marker.encode("utf-8")
+            payload_max = max(0, self.LOG_MAX_BYTES - len(marker_bytes))
+            truncated = encoded[:payload_max].decode("utf-8", errors="ignore")
+            logs = truncated + marker
         with self._lock:
             if job_id in self._jobs:
                 self._jobs[job_id].stored_logs = logs

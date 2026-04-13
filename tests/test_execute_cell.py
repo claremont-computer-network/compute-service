@@ -259,7 +259,7 @@ def test_cell_logs_stored_in_job_record(api_client, mock_docker_client):
 
 
 def test_cell_logs_truncated_at_256kib(api_client, mock_docker_client):
-    """Logs exceeding 256 KiB are truncated before storage."""
+    """Stored logs never exceed LOG_MAX_BYTES (strict cap including the marker)."""
     from app.jobs import JobStore
     container = mock_docker_client.containers.create.return_value
     container.id = "storedlogstest002"
@@ -271,7 +271,8 @@ def test_cell_logs_truncated_at_256kib(api_client, mock_docker_client):
     import app.main as m
     record = m.job_store.get("storedlogstest002")
     assert record is not None
-    assert len(record.stored_logs.encode("utf-8")) <= JobStore.LOG_MAX_BYTES + 100  # marker overhead
+    # The stored value must be strictly within the byte cap.
+    assert len(record.stored_logs.encode("utf-8")) <= JobStore.LOG_MAX_BYTES
     assert "truncated" in record.stored_logs
 
 

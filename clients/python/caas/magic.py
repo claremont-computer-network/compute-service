@@ -43,7 +43,7 @@ _config: dict = {
 # Args consumed by the magic itself; the rest are forwarded verbatim to execute_cell().
 # Adding a new --flag: add to _parse_line() with dest= matching the execute_cell()
 # kwarg name. Only add to this set if the arg is NOT a container option.
-_MAGIC_META_ARGS: frozenset[str] = frozenset({"image", "gpu", "timeout", "volumes"})
+_MAGIC_META_ARGS: frozenset[str] = frozenset({"image", "gpu", "timeout", "volumes", "verbose"})
 
 
 def _get_ipython():
@@ -75,6 +75,9 @@ def _parse_line(line: str) -> argparse.Namespace:
                         metavar="HOST:CONTAINER[:MODE]",
                         help="Bind-mount a host path, e.g. /home/erik/nas_data:/outputs. "
                              "May be repeated for multiple mounts.")
+    parser.add_argument("--verbose", action="store_true", default=False,
+                        help="Include stderr (container banner, pip warnings) in output. "
+                             "Always enabled when the job exits non-zero.")
     # unknown args are silently ignored so custom flags don't break the magic
     ns, _ = parser.parse_known_args(shlex.split(line))
     return ns
@@ -141,7 +144,8 @@ def _dispatch_magic(line: str, cell: str) -> None:
 
     client = _make_client(timeout=timeout)
     try:
-        logs = client.execute_cell(code=cell, image=image, gpu=gpu, volumes=volumes, **opts)
+        logs = client.execute_cell(code=cell, image=image, gpu=gpu, volumes=volumes,
+                                   verbose=args.verbose, **opts)
     except CaasTimeoutError as exc:
         raise CaasMagicError(str(exc)) from exc
     except CaasError as exc:

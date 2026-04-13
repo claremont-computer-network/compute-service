@@ -87,11 +87,60 @@ def test_execute_raises_on_400(client, mock_transport):
 # ---------------------------------------------------------------------------
 
 def test_execute_cell_returns_logs(client, mock_transport):
+    """Legacy server (logs-only response) still works — falls back to logs field."""
     mock_transport[("POST", f"{BASE_URL}/v1/execute/cell")] = _make_response(
-        200, {"status": "exited", "logs": "hello from cell\n"}
+        200, {"status": "exited", "exit_code": 0, "logs": "hello from cell\n"}
     )
     logs = client.execute_cell(code="print('hello from cell')", image="python:3.11-slim")
     assert logs == "hello from cell\n"
+
+
+def test_execute_cell_returns_stdout_by_default(client, mock_transport):
+    """With a split-stream server response the client returns stdout only (no banner)."""
+    mock_transport[("POST", f"{BASE_URL}/v1/execute/cell")] = _make_response(
+        200, {
+            "status": "exited",
+            "exit_code": 0,
+            "stdout": "2\n",
+            "stderr": "WARNING: banner noise\n",
+            "logs": "2\nWARNING: banner noise\n",
+        }
+    )
+    result = client.execute_cell(code="print(1+1)", image="python:3.11-slim")
+    assert result == "2\n"
+    assert "banner noise" not in result
+
+
+def test_execute_cell_verbose_returns_merged_logs(client, mock_transport):
+    """verbose=True returns the full merged logs stream."""
+    mock_transport[("POST", f"{BASE_URL}/v1/execute/cell")] = _make_response(
+        200, {
+            "status": "exited",
+            "exit_code": 0,
+            "stdout": "2\n",
+            "stderr": "WARNING: banner noise\n",
+            "logs": "2\nWARNING: banner noise\n",
+        }
+    )
+    result = client.execute_cell(code="print(1+1)", image="python:3.11-slim", verbose=True)
+    assert "2\n" in result
+    assert "banner noise" in result
+
+
+def test_execute_cell_nonzero_exit_always_returns_merged_logs(client, mock_transport):
+    """Non-zero exit returns merged logs regardless of verbose flag so tracebacks are visible."""
+    mock_transport[("POST", f"{BASE_URL}/v1/execute/cell")] = _make_response(
+        200, {
+            "status": "exited",
+            "exit_code": 1,
+            "stdout": "",
+            "stderr": "Traceback (most recent call last):\n  ...\nValueError: bad input\n",
+            "logs": "Traceback (most recent call last):\n  ...\nValueError: bad input\n",
+        }
+    )
+    result = client.execute_cell(code="raise ValueError('bad input')", image="python:3.11-slim")
+    assert "Traceback" in result
+    assert "ValueError" in result
 
 
 def test_execute_cell_sends_code_and_image(client, mock_transport):

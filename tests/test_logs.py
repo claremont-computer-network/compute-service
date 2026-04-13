@@ -2,8 +2,7 @@
 Tests for GET /v1/logs/{container_id}
 """
 import docker.errors
-
-from test_execute_cell import _set_cell_logs
+from conftest import set_cell_logs as _set_cell_logs
 
 LOGS_URL = "/v1/logs/{}"
 CELL_URL = "/v1/execute/cell"

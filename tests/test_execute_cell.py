@@ -3,21 +3,14 @@ Tests for POST /v1/execute/cell (dispatcher-side endpoint).
 """
 import pytest
 import docker.errors
+from conftest import set_cell_logs
 
 CELL_URL = "/v1/execute/cell"
 
 
 def _set_cell_logs(container, stdout: bytes = b"", stderr: bytes = b""):
-    """Configure the container mock to return specific stdout/stderr bytes."""
-    def _logs(stdout=True, stderr=True, **kwargs):  # noqa: F811
-        out = stdout_bytes if stdout else b""
-        err = stderr_bytes if stderr else b""
-        if stdout and stderr:
-            return out + err
-        return out if stdout else err
-    stdout_bytes = stdout
-    stderr_bytes = stderr
-    container.logs.side_effect = _logs
+    """Thin alias kept for backward-compat within this module."""
+    set_cell_logs(container, stdout=stdout, stderr=stderr)
 
 
 def test_cell_execute_returns_logs(api_client, mock_docker_client):

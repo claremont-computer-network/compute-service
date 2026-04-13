@@ -16,6 +16,29 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "dispatcher"))
 
 # ---------------------------------------------------------------------------
+# Shared test helpers
+# ---------------------------------------------------------------------------
+
+def set_cell_logs(container, stdout: bytes = b"", stderr: bytes = b""):
+    """Configure a container mock to return specific stdout/stderr bytes.
+
+    After calling this helper, ``container.logs(stdout=True, stderr=False)``
+    returns *stdout*, ``container.logs(stdout=False, stderr=True)`` returns
+    *stderr*, and the legacy ``container.logs(stdout=True, stderr=True)``
+    call returns the merged stream — mirroring the real Docker SDK behaviour.
+    """
+    def _logs(stdout=True, stderr=True, **kwargs):  # noqa: F811
+        out = stdout_bytes if stdout else b""
+        err = stderr_bytes if stderr else b""
+        if stdout and stderr:
+            return out + err
+        return out if stdout else err
+    stdout_bytes = stdout
+    stderr_bytes = stderr
+    container.logs.side_effect = _logs
+
+
+# ---------------------------------------------------------------------------
 # Build a minimal fake docker client that every test can shape
 # ---------------------------------------------------------------------------
 

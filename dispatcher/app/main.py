@@ -487,18 +487,20 @@ def execute_cell(req: CellRequest, authorized: bool = Depends(get_api_key)):
         try:
             # Capture stdout and stderr separately so the client can choose
             # whether to display container-entrypoint noise (stderr) or just
-            # the user's print() output (stdout).  Both streams are stored
-            # for the logs endpoint; "logs" is kept as the merged stream for
-            # backward compatibility with callers that read only that field.
+            # the user's print() output (stdout).  We also fetch the merged
+            # stream in a single Docker call so the legacy "logs" field
+            # preserves the original interleaved order rather than simply
+            # concatenating the two streams.
             stdout = container.logs(stdout=True, stderr=False).decode(errors="replace")
             stderr = container.logs(stdout=False, stderr=True).decode(errors="replace")
+            logs   = container.logs(stdout=True,  stderr=True ).decode(errors="replace")
         except (NotFound, DockerException):
             # Container was removed (e.g. by a concurrent DELETE /v1/jobs/{id})
             # between wait() returning and logs() being called.  Best-effort:
             # return whatever we have rather than turning this into a 500.
             stdout = ""
             stderr = ""
-        logs = stdout + stderr  # merged — used for stored_logs and legacy "logs" field
+            logs   = ""
         job_store.mark_stopped(record.job_id, exit_code=exit_code)
         job_store.store_logs(record.job_id, logs)
 

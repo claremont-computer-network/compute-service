@@ -507,7 +507,8 @@ def _enrich_job_data(job, data: dict) -> None:
     if job.status != "running":
         return
     if not job.docker_backed:
-        # Non-container-backed job (e.g. execute_cell tracked by UUID).
+        # Job is not docker_backed (for example, execute_cell is tracked by UUID
+        # rather than a Docker container ID, even though it may still run in Docker).
         # Status is managed directly by execute_cell — skip Docker enrichment.
         return
     try:
@@ -559,6 +560,14 @@ def stop_job(job_id: str, authorized: bool = Depends(get_api_key)):
     job = job_store.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
+    if not job.docker_backed:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This job is not tracked by a Docker container ID and cannot be "
+                "stopped via the API (execute_cell jobs run to completion)."
+            ),
+        )
     try:
         container = client.containers.get(job.container_id)
         container.stop()

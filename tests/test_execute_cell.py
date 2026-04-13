@@ -230,3 +230,18 @@ def test_cell_job_not_enriched_via_docker(api_client, mock_docker_client):
     mock_docker_client.containers.get.reset_mock()
     api_client.get("/v1/jobs")
     mock_docker_client.containers.get.assert_not_called()
+
+
+def test_stop_cell_job_returns_409(api_client, mock_docker_client):
+    """DELETE /v1/jobs/{id} must return 409 for non-docker-backed cell jobs."""
+    mock_docker_client.containers.run.return_value = b""
+    api_client.post(CELL_URL, json={"code": "pass", "image": "python:3.11-slim"})
+
+    jobs = api_client.get("/v1/jobs").json()
+    assert len(jobs) == 1
+    job_id = jobs[0]["job_id"]
+
+    resp = api_client.delete(f"/v1/jobs/{job_id}")
+    assert resp.status_code == 409
+    # Container stop/remove must never be attempted for these jobs
+    mock_docker_client.containers.get.assert_not_called()

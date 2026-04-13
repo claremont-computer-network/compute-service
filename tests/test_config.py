@@ -53,3 +53,111 @@ def test_allow_ipc_host_case_insensitive():
     for val in ("TRUE", "True", "true"):
         m = _reload_main({"ALLOW_IPC_HOST": val})
         assert m.ALLOW_IPC_HOST is True, f"failed for {val!r}"
+
+
+# ── QUEUE_TIMEOUT_SECS ────────────────────────────────────────────────────────
+
+def test_queue_timeout_valid_integer():
+    """A valid QUEUE_TIMEOUT_SECS is parsed correctly."""
+    m = _reload_main({"QUEUE_TIMEOUT_SECS": "120"})
+    assert m.QUEUE_TIMEOUT == 120
+
+
+def test_queue_timeout_default():
+    """QUEUE_TIMEOUT defaults to 300 when the env var is absent."""
+    for mod_name in list(sys.modules):
+        if "app.main" in mod_name:
+            del sys.modules[mod_name]
+    with patch("docker.from_env"), patch.dict("os.environ", {}, clear=True):
+        import app.main as m
+    assert m.QUEUE_TIMEOUT == 300
+
+
+def test_queue_timeout_invalid_falls_back_to_300(caplog):
+    """A non-integer QUEUE_TIMEOUT_SECS logs a warning and falls back to 300."""
+    import logging
+    with caplog.at_level(logging.WARNING, logger="caas.dispatcher"):
+        m = _reload_main({"QUEUE_TIMEOUT_SECS": "infinity"})
+    assert m.QUEUE_TIMEOUT == 300
+    assert "QUEUE_TIMEOUT_SECS" in caplog.text
+
+
+def test_queue_timeout_negative_clamps_to_zero(caplog):
+    """A negative QUEUE_TIMEOUT_SECS logs a warning and clamps to 0 (fail-fast)."""
+    import logging
+    with caplog.at_level(logging.WARNING, logger="caas.dispatcher"):
+        m = _reload_main({"QUEUE_TIMEOUT_SECS": "-1"})
+    assert m.QUEUE_TIMEOUT == 0
+    assert "QUEUE_TIMEOUT_SECS" in caplog.text
+
+
+# ── MAX_CONCURRENT_GPU_JOBS ───────────────────────────────────────────────────
+
+def test_max_concurrent_gpu_jobs_valid_integer():
+    """A valid MAX_CONCURRENT_GPU_JOBS is reflected in the GPU semaphore."""
+    m = _reload_main({"MAX_CONCURRENT_GPU_JOBS": "3"})
+    assert m.resource_slots._slots["gpu"]._value == 3
+
+
+def test_max_concurrent_gpu_jobs_default():
+    """MAX_CONCURRENT_GPU_JOBS defaults to 1 when the env var is absent."""
+    for mod_name in list(sys.modules):
+        if "app.main" in mod_name:
+            del sys.modules[mod_name]
+    with patch("docker.from_env"), patch.dict("os.environ", {}, clear=True):
+        import app.main as m
+    assert m.resource_slots._slots["gpu"]._value == 1
+
+
+def test_max_concurrent_gpu_jobs_invalid_falls_back_to_default(caplog):
+    """A non-integer MAX_CONCURRENT_GPU_JOBS logs a warning and falls back to 1."""
+    import logging
+    with caplog.at_level(logging.WARNING, logger="caas.dispatcher"):
+        m = _reload_main({"MAX_CONCURRENT_GPU_JOBS": "two"})
+    assert m.resource_slots._slots["gpu"]._value == 1
+    assert "MAX_CONCURRENT_GPU_JOBS" in caplog.text
+
+
+def test_max_concurrent_gpu_jobs_negative_clamps_to_zero(caplog):
+    """A negative MAX_CONCURRENT_GPU_JOBS logs a warning and clamps to 0."""
+    import logging
+    with caplog.at_level(logging.WARNING, logger="caas.dispatcher"):
+        m = _reload_main({"MAX_CONCURRENT_GPU_JOBS": "-5"})
+    assert m.resource_slots._slots["gpu"]._value == 0
+    assert "MAX_CONCURRENT_GPU_JOBS" in caplog.text
+
+
+# ── MAX_CONCURRENT_CPU_JOBS ───────────────────────────────────────────────────
+
+def test_max_concurrent_cpu_jobs_valid_integer():
+    """A valid MAX_CONCURRENT_CPU_JOBS is reflected in the CPU semaphore."""
+    m = _reload_main({"MAX_CONCURRENT_CPU_JOBS": "8"})
+    assert m.resource_slots._slots["cpu"]._value == 8
+
+
+def test_max_concurrent_cpu_jobs_default():
+    """MAX_CONCURRENT_CPU_JOBS defaults to 4 when the env var is absent."""
+    for mod_name in list(sys.modules):
+        if "app.main" in mod_name:
+            del sys.modules[mod_name]
+    with patch("docker.from_env"), patch.dict("os.environ", {}, clear=True):
+        import app.main as m
+    assert m.resource_slots._slots["cpu"]._value == 4
+
+
+def test_max_concurrent_cpu_jobs_invalid_falls_back_to_default(caplog):
+    """A non-integer MAX_CONCURRENT_CPU_JOBS logs a warning and falls back to 4."""
+    import logging
+    with caplog.at_level(logging.WARNING, logger="caas.dispatcher"):
+        m = _reload_main({"MAX_CONCURRENT_CPU_JOBS": "many"})
+    assert m.resource_slots._slots["cpu"]._value == 4
+    assert "MAX_CONCURRENT_CPU_JOBS" in caplog.text
+
+
+def test_max_concurrent_cpu_jobs_negative_clamps_to_zero(caplog):
+    """A negative MAX_CONCURRENT_CPU_JOBS logs a warning and clamps to 0."""
+    import logging
+    with caplog.at_level(logging.WARNING, logger="caas.dispatcher"):
+        m = _reload_main({"MAX_CONCURRENT_CPU_JOBS": "-2"})
+    assert m.resource_slots._slots["cpu"]._value == 0
+    assert "MAX_CONCURRENT_CPU_JOBS" in caplog.text

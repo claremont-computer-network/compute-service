@@ -101,6 +101,14 @@ class PluginRegistry:
         self._plugins.append(plugin)
         self._plugins.sort(key=lambda p: p.priority)
 
+    def clear(self) -> None:
+        """Remove all registered plugins.
+
+        Call this before ``register_default_plugins()`` to ensure a clean
+        slate (e.g. during test reloads or service restarts).
+        """
+        self._plugins.clear()
+
     def pre_create(self, req: t.Any, create_kwargs: dict) -> None:
         """Invoke :meth:`~CaasPlugin.pre_create` on every registered plugin."""
         for plugin in self._plugins:

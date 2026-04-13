@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import os
 import typing as t
+from pathlib import Path
 
 from fastapi import HTTPException
 
@@ -70,9 +71,21 @@ class VolumePolicyPlugin(CaasPlugin):
 
         bindings: dict[str, dict] = {}
         for v in volumes:
-            hp = os.path.abspath(v.host_path)
+            # resolve() follows symlinks and normalises the path, preventing
+            # symlink-escape attacks and trailing-slash mismatches.
+            # strict=False means the path need not exist yet (e.g. a newly
+            # created output dir that hasn't been written to yet).
+            try:
+                hp = str(Path(v.host_path).resolve(strict=False))
+            except OSError as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Cannot resolve host path {v.host_path!r}: {exc}",
+                )
+            # Canonicalize the allow-list roots the same way.
             allowed = any(
-                hp == p or hp.startswith(p + os.sep)
+                hp == str(Path(p).resolve(strict=False))
+                or hp.startswith(str(Path(p).resolve(strict=False)) + os.sep)
                 for p in _main.ALLOWED_HOST_DIRS
                 if p
             )

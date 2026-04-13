@@ -40,7 +40,7 @@ def register_default_plugins(job_store, docker_client) -> None:
         docker_client: The active Docker SDK client (unused directly —
             plugins read ``app.main.client`` at call-time).
     """
-    registry._plugins.clear()
+    registry.clear()
     registry.register(NvidiaEntrypointPlugin())
     registry.register(ShmIpcPolicyPlugin())
     registry.register(VolumePolicyPlugin())

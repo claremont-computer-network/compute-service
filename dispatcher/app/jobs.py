@@ -19,7 +19,7 @@ import threading
 import typing as t
 from datetime import datetime, timezone
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger("caas.jobs")
 
@@ -45,7 +45,8 @@ class JobRecord(BaseModel):
     resources: t.Optional[ResourceStats] = None   # populated on GET, not at submit
     # Sampled resource history for synchronous cell jobs (docker_backed containers
     # that complete before the next UI poll can capture live stats).
-    resource_history: t.List[ResourceStats] = []
+    # Capped at 200 samples (~10 min at 3 s intervals) to bound memory usage.
+    resource_history: t.List[ResourceStats] = Field(default_factory=list)
 
 
 def _fetch_resources(container) -> t.Optional[ResourceStats]:
@@ -153,10 +154,16 @@ class JobStore:
                     self._jobs[job_id].exit_code = exit_code
 
     def append_resource_sample(self, job_id: str, sample: ResourceStats) -> None:
-        """Append one resource-stats sample collected during a running job."""
+        """Append one resource-stats sample collected during a running job.
+
+        Silently drops the sample if the job already has 200 entries (~10 min
+        at the default 3-second polling interval) to prevent unbounded growth.
+        """
         with self._lock:
             if job_id in self._jobs:
-                self._jobs[job_id].resource_history.append(sample)
+                history = self._jobs[job_id].resource_history
+                if len(history) < 200:
+                    history.append(sample)
 
     # ── read ──────────────────────────────────────────────────────────────────
 

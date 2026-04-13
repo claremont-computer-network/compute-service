@@ -454,8 +454,12 @@ def execute_cell(req: CellRequest, authorized: bool = Depends(get_api_key)):
         cmd = ["python", "-c", req.code]
         run_kwargs = _prepare_run(req)
         run_kwargs["command"] = cmd
+        # containers.create() does not accept stdout/stderr (those are only
+        # meaningful for containers.run(detach=False)).  Strip them before
+        # creating so we don't get a TypeError with docker-py >= 6.
+        create_kwargs = {k: v for k, v in run_kwargs.items() if k not in ("stdout", "stderr")}
         # Create (but don't start) so we have a real container ID to register.
-        container = client.containers.create(req.image, **run_kwargs)
+        container = client.containers.create(req.image, **create_kwargs)
         record = job_store.register(container, image=req.image, cmd=cmd)
 
         # Background thread: sample stats every 3 s while the container runs.
@@ -468,13 +472,16 @@ def execute_cell(req: CellRequest, authorized: bool = Depends(get_api_key)):
                     job_store.append_resource_sample(record.job_id, sample)
 
         sampler = threading.Thread(target=_sample_stats, daemon=True)
+        sampler_started = False
         try:
             container.start()
             sampler.start()
+            sampler_started = True
             result = container.wait()   # blocks until the container exits
         finally:
             stop_event.set()
-            sampler.join(timeout=5)
+            if sampler_started:
+                sampler.join(timeout=5)
 
         exit_code = result.get("StatusCode", -1)
         logs = container.logs(stdout=True, stderr=True).decode(errors="replace")
@@ -493,7 +500,7 @@ def execute_cell(req: CellRequest, authorized: bool = Depends(get_api_key)):
     except DockerException as e:
         if record is not None:
             job_store.mark_stopped(record.job_id, exit_code=-1)
-        elif container is not None:
+        if container is not None:
             try:
                 container.remove(force=True)
             except DockerException:

@@ -376,20 +376,24 @@
 
     // Render a spark cell HTML string (canvas + label).
     // After inserting into the DOM, call paintAllSparklines() to actually draw.
-    function sparkCellHtml(jobId, kind) {
+    // status: "running" | "stopped" | other — used to prefer peakMem for stopped jobs.
+    function sparkCellHtml(jobId, kind, status) {
       const h   = _history[jobId];
       const arr = h ? h[kind] : [];
       const cur = arr.length ? arr[arr.length - 1] : null;
+      const stopped = status !== "running";
 
       let label;
       if (kind === "cpu") {
         label = cur !== null ? cur.toFixed(1) + "%" : "—";
       } else {
-        // mem — show current value for running jobs, peak for stopped jobs.
-        const peak = h && h.peakMem !== null ? h.peakMem : null;
-        if (cur !== null) {
+        // mem — prefer peak for stopped jobs so the high-water mark is always shown.
+        const peak = h?.peakMem ?? null;
+        if (stopped && peak != null) {
+          label = peak.toFixed(0) + " MiB";
+        } else if (cur !== null) {
           label = cur.toFixed(0) + " MiB";
-        } else if (peak !== null) {
+        } else if (peak != null) {
           label = peak.toFixed(0) + " MiB";
         } else {
           label = "—";
@@ -489,6 +493,8 @@
       }
 
       // Nothing cached — start a fetch and store the Promise immediately.
+      // Stamp the fetch start time so restoreLogRows() can throttle refreshes.
+      _logLastFetch[job.job_id] = Date.now();
       const promise = fetchLogs(job).then(text => {
         _logCache[job.job_id] = text;
         return text;
@@ -518,7 +524,7 @@
         // Collapse
         _openLogs.delete(jobId);
         jobRow.setAttribute("aria-expanded", "false");
-        const existing = document.getElementById(`log-row-${CSS.escape(jobId)}`);
+        const existing = document.getElementById(`log-row-${jobId}`);
         if (existing) existing.remove();
         return;
       }
@@ -556,12 +562,12 @@
 
         const job = _jobMap[jobId] ?? { job_id: jobId, docker_backed: true };
         // For running jobs, only invalidate the cache if enough time has passed
-        // since the last fetch — avoids re-downloading full logs every 3s poll.
+        // since the last fetch started (tracked by populateLogPanel).
         if (job.status === "running") {
           const last = _logLastFetch[jobId] ?? 0;
           if (Date.now() - last >= LOG_REFRESH_INTERVAL) {
             delete _logCache[jobId];
-            _logLastFetch[jobId] = Date.now();
+            // _logLastFetch will be updated by populateLogPanel when it starts.
           }
         }
         populateLogPanel(logRow, job);
@@ -591,8 +597,8 @@
           <td>${badge(job.status)}</td>
           <td>${relativeTime(job.submitted_at)}</td>
           <td class="duration" data-job-id="${fullId}" data-submitted="${esc(job.submitted_at ?? "")}">${duration(job.submitted_at, job.job_id)}</td>
-          <td>${sparkCellHtml(job.job_id, "cpu")}</td>
-          <td>${sparkCellHtml(job.job_id, "mem")}</td>
+          <td>${sparkCellHtml(job.job_id, "cpu", job.status)}</td>
+          <td>${sparkCellHtml(job.job_id, "mem", job.status)}</td>
           <td>${exitCell(job.exit_code)}</td>
           <td class="actions">
             <button data-action="stop" data-id="${fullId}"
@@ -648,8 +654,11 @@
     });
 
     // Keyboard support: Enter or Space on a focused row toggles the log panel.
+    // Guard against focus being on the Stop button so native button activation
+    // (Enter/Space on <button>) is not intercepted.
     document.getElementById("job-body").addEventListener("keydown", e => {
       if (e.key !== "Enter" && e.key !== " ") return;
+      if (e.target.closest("button[data-action]")) return;
       const row = e.target.closest("tr.job-row");
       if (!row) return;
       e.preventDefault();

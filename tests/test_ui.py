@@ -5,7 +5,6 @@ Covers:
 - GET /ui returns 200 and serves HTML when the ui/ directory is present.
 - The app starts cleanly when the ui/ directory is absent (mount skipped).
 """
-import os
 import sys
 from unittest.mock import patch
 
@@ -19,21 +18,16 @@ def test_ui_serves_index(api_client):
 
 
 def test_ui_mount_skipped_when_directory_absent(mock_docker_client):
-    """App imports cleanly and the 'ui' mount is absent when ui/ does not exist."""
+    """App imports cleanly and the 'ui' mount is absent when no ui/ dir exists."""
     # Force a fresh import so the conditional mount logic re-runs.
     for mod_name in list(sys.modules):
         if "app.main" in mod_name:
             del sys.modules[mod_name]
 
-    real_isdir = os.path.isdir
-
-    def fake_isdir(path):
-        if os.path.basename(os.path.normpath(path)) == "ui":
-            return False
-        return real_isdir(path)
-
+    # Patch os.path.isdir inside the app.main module so _resolve_ui_dir()
+    # returns None during import — before the StaticFiles mount decision runs.
     with patch("docker.from_env", return_value=mock_docker_client), \
-         patch("os.path.isdir", side_effect=fake_isdir):
+         patch("os.path.isdir", return_value=False):
         import app.main as main_module
 
     routes = {r.name for r in main_module.app.routes if hasattr(r, "name")}

@@ -133,9 +133,6 @@
     .spark-label { color: #d2a8ff; min-width: 52px; text-align: right; }
     .spark-label.null { color: #3d444d; }
 
-    /* Peak badge shown for stopped jobs */
-    .peak { font-size: 0.7rem; color: #6e7681; }
-
     /* Action buttons — wired to DELETE /v1/jobs/{id}, disabled when not running */
     .actions button {
       background: none;
@@ -262,7 +259,11 @@
       if (!iso) return "—";
       const h = _history[jobId];
       // For stopped jobs use the frozen elapsed stored when we saw the stop.
-      if (h && h.stoppedElapsed != null) return fmtElapsed(h.stoppedElapsed);
+      if (h && h.stoppedElapsed != null) {
+        const se = h.stoppedElapsed;
+        if (!Number.isFinite(se) || se < 0 || se > _MAX_ELAPSED_S) return "—";
+        return fmtElapsed(se);
+      }
       const ts = new Date(iso).getTime();
       // Treat epoch (dispatcher hydrate sentinel) or unparseable dates as unknown.
       if (!isFinite(ts) || ts <= _EPOCH_MS) return "—";
@@ -315,8 +316,14 @@
           h.peakMem = res.mem_usage_mib;
       }
       // Freeze elapsed time the moment we first see a stopped job.
+      // Validate the timestamp first — epoch sentinel or malformed dates
+      // must not store NaN/huge values that would survive for the session.
       if (job.status !== "running" && h.stoppedElapsed === null && job.submitted_at) {
-        h.stoppedElapsed = Math.floor((Date.now() - new Date(job.submitted_at)) / 1000);
+        const ts = new Date(job.submitted_at).getTime();
+        if (isFinite(ts) && ts > _EPOCH_MS) {
+          const secs = Math.floor((Date.now() - ts) / 1000);
+          if (secs >= 0 && secs <= _MAX_ELAPSED_S) h.stoppedElapsed = secs;
+        }
       }
     }
 
@@ -367,18 +374,17 @@
     }
 
     // Render a spark cell HTML string (canvas + label).
-    // After inserting into the DOM, call paintSparkCanvas() to actually draw.
+    // After inserting into the DOM, call paintAllSparklines() to actually draw.
     function sparkCellHtml(jobId, kind) {
       const h   = _history[jobId];
       const arr = h ? h[kind] : [];
       const cur = arr.length ? arr[arr.length - 1] : null;
 
-      let label, unit;
+      let label;
       if (kind === "cpu") {
         label = cur !== null ? cur.toFixed(1) + "%" : "—";
-        unit  = "%";
       } else {
-        // mem — also show peak for stopped jobs
+        // mem — show current value for running jobs, peak for stopped jobs.
         const peak = h && h.peakMem !== null ? h.peakMem : null;
         if (cur !== null) {
           label = cur.toFixed(0) + " MiB";
@@ -387,10 +393,8 @@
         } else {
           label = "—";
         }
-        unit = "MiB";
       }
 
-      const hasData = arr.length >= 2;
       const nullCls = cur === null && !(h && h.peakMem) ? " null" : "";
 
       return `<div class="spark-cell">
@@ -452,23 +456,48 @@
 
     // Populate a log panel <pre> for jobId.
     // Uses cache if available; otherwise fetches and populates the cache.
+    // The Promise itself is stored in _logCache while the fetch is in flight so
+    // concurrent callers (e.g. restoreLogRows() racing with toggleLogs()) await
+    // the same request rather than issuing a second one.
     async function populateLogPanel(logRow, job) {
       const cached = _logCache[job.job_id];
-      if (cached !== undefined && cached !== null) {
+
+      // Already resolved — fill immediately.
+      if (typeof cached === "string") {
         const pre = logRow.querySelector("pre");
         if (pre) { pre.className = ""; pre.textContent = cached; pre.scrollTop = pre.scrollHeight; }
         return;
       }
-      // Mark in-flight with null so a second concurrent call doesn't double-fetch.
-      _logCache[job.job_id] = null;
-      try {
-        const text = await fetchLogs(job);
+
+      // In-flight — wait for the existing promise instead of starting a new fetch.
+      if (cached instanceof Promise) {
+        try {
+          const text = await cached;
+          const pre = logRow.querySelector("pre");
+          if (pre) { pre.className = ""; pre.textContent = text; pre.scrollTop = pre.scrollHeight; }
+        } catch (e) {
+          const pre = logRow.querySelector("pre");
+          if (pre) { pre.className = "log-error"; pre.textContent = `Error loading logs: ${e.message}`; }
+        }
+        return;
+      }
+
+      // Nothing cached — start a fetch and store the Promise immediately.
+      const promise = fetchLogs(job).then(text => {
         _logCache[job.job_id] = text;
+        return text;
+      }).catch(e => {
+        // Don't cache errors — allow retry on next toggle.
+        delete _logCache[job.job_id];
+        throw e;
+      });
+      _logCache[job.job_id] = promise;
+
+      try {
+        const text = await promise;
         const pre = logRow.querySelector("pre");
         if (pre) { pre.className = ""; pre.textContent = text; pre.scrollTop = pre.scrollHeight; }
       } catch (e) {
-        // Don't cache errors — allow retry on next toggle.
-        delete _logCache[job.job_id];
         const pre = logRow.querySelector("pre");
         if (pre) { pre.className = "log-error"; pre.textContent = `Error loading logs: ${e.message}`; }
       }

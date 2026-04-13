@@ -134,6 +134,72 @@ synchronous workloads. Default: 120 s.
 # ... job that takes up to an hour
 ```
 
+### `--suppress-entrypoint` / `--no-suppress-entrypoint`
+
+Override the container's `ENTRYPOINT` with an empty string so the image's startup script is
+skipped entirely.  Useful for **NVIDIA NGC images** (`nvcr.io/*`), whose entrypoint prints a
+multi-page banner to stdout before exec-ing the user command.
+
+**This flag is auto-enabled for any image whose name starts with `nvcr.io/`**, so you
+normally don't need to type it:
+
+```python
+# Banner is automatically suppressed — no flag needed
+%%dispatch --image nvcr.io/nvidia/pytorch:25.03-py3 --gpu all
+import torch
+print(torch.cuda.get_device_name(0))
+```
+
+If you need to explicitly disable the auto-suppression (e.g. the entrypoint sets up env vars
+your code depends on), pass `--no-suppress-entrypoint`:
+
+```python
+%%dispatch --image nvcr.io/nvidia/pytorch:25.03-py3 --gpu all --no-suppress-entrypoint
+import torch
+print(torch.cuda.get_device_name(0))
+```
+
+!!! warning "Stale client"
+    Auto-suppression lives in the Python client, not the server.  If you see the NVIDIA banner
+    in cell output, your `caas` package is out of date.  Reinstall it:
+    ```python
+    import subprocess, sys
+    subprocess.check_call([sys.executable, "-m", "pip", "install",
+                           "--upgrade", "--force-reinstall",
+                           "git+https://github.com/claremont-computer-network/compute-service.git"
+                           "#subdirectory=clients/python"])
+    ```
+    Then restart the notebook kernel.
+
+### `--verbose`
+
+Include stderr (container banner, pip deprecation warnings, etc.) in the cell output.
+Stderr is always shown when the job exits non-zero so tracebacks are never hidden.
+
+```python
+%%dispatch --image python:3.11-slim --verbose
+import subprocess
+subprocess.run(["pip", "install", "numpy"])  # pip output visible
+import numpy as np
+print(np.__version__)
+```
+
+---
+
+## Flags reference
+
+| Flag | Description |
+|------|-------------|
+| `--image IMAGE` | Docker image to use for this cell |
+| `--gpu all\|ID,...` | Request GPU access |
+| `--volume HOST:CONTAINER[:MODE]` | Bind-mount a host path (repeatable) |
+| `--shm-size SIZE` | `/dev/shm` size, e.g. `1g` |
+| `--ipc host` | Share host IPC namespace (unlimited shm) |
+| `--timeout SECS` | HTTP read timeout override |
+| `--suppress-entrypoint` | Skip the container ENTRYPOINT (auto-set for `nvcr.io/*`) |
+| `--no-suppress-entrypoint` | Disable auto-suppression for `nvcr.io/*` images |
+| `--verbose` | Show stderr in output (always shown on non-zero exit) |
+
 ---
 
 ## Behaviour

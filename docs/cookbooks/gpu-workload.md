@@ -243,6 +243,14 @@ print("CUDA avail   :", torch.cuda.is_available())
 print("device       :", torch.cuda.get_device_name(0))
 ```
 
+!!! tip "NVIDIA entrypoint banner"
+    NGC images run an entrypoint shell script that prints a multi-page copyright/release banner
+    to stdout before executing your code.  The `caas` client **automatically suppresses this**
+    for any image whose name starts with `nvcr.io/` — no extra flag needed.  If you still see
+    the banner, your client package is out of date; see the
+    [--suppress-entrypoint docs](../client/dispatch-magic.md#--suppress-entrypoint----no-suppress-entrypoint)
+    for how to reinstall it.
+
 The `nvcr.io/nvidia/pytorch` images are large (~20 GB) but include CUDA, cuDNN, NCCL, and
 PyTorch pre-built against the exact driver on the host. Pull once on the remote machine to
 avoid timeout on first use:

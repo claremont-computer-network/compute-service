@@ -2,6 +2,7 @@ import os
 import threading
 import typing as t
 import logging
+import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from fastapi import FastAPI, HTTPException, Header, Depends, Request
@@ -441,17 +442,23 @@ def execute_cell(req: CellRequest, authorized: bool = Depends(get_api_key)):
     """Run a notebook cell as `python -c <code>` and return its output.
 
     Execution is always synchronous (detach=False, remove=True) — the response
-    is returned only after the container exits.
+    is returned only after the container exits.  The job is registered in the
+    job store so it appears in the UI, then immediately marked stopped.
     """
     resource = "gpu" if req.gpu is not None else "cpu"
     _acquire_slot(resource)
+    # Register the job before the run so it's visible in the UI while running.
+    job_id = uuid.uuid4().hex
+    cmd = ["python", "-c", req.code]
+    job_store.register_sync(job_id, image=req.image, cmd=cmd)
     try:
         run_kwargs = _prepare_run(req)
-        run_kwargs["command"] = ["python", "-c", req.code]
+        run_kwargs["command"] = cmd
         run_kwargs["detach"] = False
         run_kwargs["remove"] = True
 
         output = client.containers.run(req.image, **run_kwargs)
+        job_store.mark_stopped(job_id, exit_code=0)
         return JSONResponse({
             "status": "exited",
             "exit_code": 0,
@@ -460,10 +467,13 @@ def execute_cell(req: CellRequest, authorized: bool = Depends(get_api_key)):
     except ContainerError as e:
         # User code exited non-zero — return logs rather than a 500 so the
         # client can display the traceback inline, just like a local cell.
+        job_store.mark_stopped(job_id, exit_code=e.exit_status)
         return JSONResponse(_container_error_response(e))
     except HTTPException:
+        job_store.mark_stopped(job_id)
         raise
     except DockerException as e:
+        job_store.mark_stopped(job_id)
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         resource_slots.release(resource)

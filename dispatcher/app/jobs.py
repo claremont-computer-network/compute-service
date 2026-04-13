@@ -120,6 +120,24 @@ class JobStore:
             self._jobs[record.job_id] = record
         return record
 
+    def register_sync(self, job_id: str, image: str,
+                      cmd: t.Union[str, t.List[str], None] = None) -> JobRecord:
+        """Record a synchronous (non-detached) job by ID without a container object.
+
+        Used for execute_cell jobs where the container is gone by the time we
+        want to register it, so we track them for history in the UI.
+        """
+        record = JobRecord(
+            job_id=job_id,
+            container_id=job_id,
+            image=image,
+            cmd=cmd,
+            submitted_at=datetime.now(timezone.utc),
+        )
+        with self._lock:
+            self._jobs[record.job_id] = record
+        return record
+
     def mark_stopped(self, job_id: str, exit_code: t.Optional[int] = None) -> None:
         with self._lock:
             if job_id in self._jobs:

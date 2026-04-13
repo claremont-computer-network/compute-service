@@ -13,6 +13,7 @@ services:
       # Leaving it unset disables auth – only acceptable for local dev.
       - DISPATCHER_API_KEY=${DISPATCHER_API_KEY:-}
       - ALLOWED_HOST_DIRS=${ALLOWED_HOST_DIRS:-/mnt,/data}
+      - ALLOW_IPC_HOST=${ALLOW_IPC_HOST:-false}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     # Run as root so the dispatcher can reach the Docker socket.

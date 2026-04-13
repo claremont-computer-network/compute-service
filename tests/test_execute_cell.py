@@ -184,3 +184,64 @@ def test_cell_validation_precedes_image_pull(api_client, mock_docker_client):
     })
     assert resp.status_code == 400
     mock_docker_client.images.pull.assert_not_called()
+
+
+# ── job-store side-effect tests ───────────────────────────────────────────────
+
+def test_cell_job_registered_and_stopped_on_success(api_client, mock_docker_client):
+    """A successful cell run appears in /v1/jobs as stopped with exit_code=0."""
+    mock_docker_client.containers.run.return_value = b"ok\n"
+    api_client.post(CELL_URL, json={"code": "print('ok')", "image": "python:3.11-slim"})
+
+    jobs = api_client.get("/v1/jobs").json()
+    cell_jobs = [j for j in jobs if j["image"] == "python:3.11-slim"]
+    assert len(cell_jobs) == 1
+    job = cell_jobs[0]
+    assert job["status"] == "stopped"
+    assert job["exit_code"] == 0
+
+
+def test_cell_job_stopped_with_nonzero_exit_on_container_error(api_client, mock_docker_client):
+    """A ContainerError marks the job stopped with the container's exit status."""
+    container_stub = mock_docker_client.containers.run.return_value
+    mock_docker_client.containers.run.side_effect = docker.errors.ContainerError(
+        container=container_stub,
+        exit_status=2,
+        command="python -c ...",
+        image="python:3.11-slim",
+        stderr=b"SyntaxError\n",
+    )
+    api_client.post(CELL_URL, json={"code": "def f(", "image": "python:3.11-slim"})
+
+    jobs = api_client.get("/v1/jobs").json()
+    cell_jobs = [j for j in jobs if j["image"] == "python:3.11-slim"]
+    assert len(cell_jobs) == 1
+    job = cell_jobs[0]
+    assert job["status"] == "stopped"
+    assert job["exit_code"] == 2
+
+
+def test_cell_job_not_enriched_via_docker(api_client, mock_docker_client):
+    """Cell jobs (docker_backed=False) must not trigger containers.get() during list."""
+    mock_docker_client.containers.run.return_value = b""
+    api_client.post(CELL_URL, json={"code": "pass", "image": "python:3.11-slim"})
+
+    # Reset call count so we only track calls made during /v1/jobs
+    mock_docker_client.containers.get.reset_mock()
+    api_client.get("/v1/jobs")
+    mock_docker_client.containers.get.assert_not_called()
+
+
+def test_stop_cell_job_returns_409(api_client, mock_docker_client):
+    """DELETE /v1/jobs/{id} must return 409 for non-docker-backed cell jobs."""
+    mock_docker_client.containers.run.return_value = b""
+    api_client.post(CELL_URL, json={"code": "pass", "image": "python:3.11-slim"})
+
+    jobs = api_client.get("/v1/jobs").json()
+    assert len(jobs) == 1
+    job_id = jobs[0]["job_id"]
+
+    resp = api_client.delete(f"/v1/jobs/{job_id}")
+    assert resp.status_code == 409
+    # Container stop/remove must never be attempted for these jobs
+    mock_docker_client.containers.get.assert_not_called()

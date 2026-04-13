@@ -254,7 +254,8 @@
           <td>${exitCell(job.exit_code)}</td>
           <td class="actions">
             <button data-action="stop" data-id="${fullId}"
-                    title="Stop job" ${running ? "" : "disabled"}>
+                    title="${running && job.docker_backed ? 'Stop job' : job.docker_backed ? 'Job already stopped' : 'Cell jobs run to completion and cannot be stopped'}"
+                    ${running && job.docker_backed ? "" : "disabled"}>
               stop
             </button>
           </td>

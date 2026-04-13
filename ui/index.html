@@ -156,6 +156,14 @@
     // ── config ────────────────────────────────────────────────────────────────
     const INTERVAL = 3000; // poll interval in ms
 
+    // Derive the API base from the page URL so the UI works behind reverse
+    // proxies (e.g. /proxy/192.168.1.101:8000/ui/).
+    // Strip the trailing /ui path segment to get the dispatcher root.
+    const _API_BASE = (function () {
+      const p = window.location.pathname.replace(/\/ui\/?.*$/, "");
+      return window.location.origin + p;
+    })();
+
     // ── api key ───────────────────────────────────────────────────────────────
     // Key is stored in sessionStorage so it is never embedded in the HTML source.
     // On first load the user is prompted once; leave blank for open deployments.
@@ -260,7 +268,7 @@
       if (action === "stop") {
         if (!confirm(`Stop job ${jobId.slice(0, 12)}?`)) return;
         try {
-          const resp = await fetch(`/v1/jobs/${jobId}`, {
+          const resp = await fetch(`${_API_BASE}/v1/jobs/${jobId}`, {
             method: "DELETE",
             headers: authHeaders(),
           });
@@ -291,7 +299,7 @@
     // ── poll ──────────────────────────────────────────────────────────────────
     async function poll() {
       try {
-        const resp = await fetch("/v1/jobs", { headers: authHeaders() });
+        const resp = await fetch(`${_API_BASE}/v1/jobs`, { headers: authHeaders() });
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const jobs = await resp.json();
 

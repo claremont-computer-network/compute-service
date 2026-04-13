@@ -74,7 +74,16 @@ def _load_env_plugins() -> None:
                 entry,
             )
             continue
-        cls = getattr(module, class_name, None)
+        try:
+            cls = getattr(module, class_name, None)
+        except Exception:  # noqa: BLE001 — PEP 562 __getattr__ or other dynamic access
+            logger.exception(
+                "CAAS_PLUGINS: error resolving attribute %r from module %r (entry %r) — skipping.",
+                class_name,
+                module_path,
+                entry,
+            )
+            continue
         if cls is None:
             logger.error(
                 "CAAS_PLUGINS: module %r has no attribute %r (entry %r) — skipping.",
@@ -100,13 +109,20 @@ def _load_env_plugins() -> None:
         try:
             plugin = cls()
             registry.register(plugin)
+            plugin_name = getattr(plugin, "name", entry)
+            plugin_priority = getattr(plugin, "priority", None)
+            logger.info(
+                "CAAS_PLUGINS: registered %r as %r (priority %r).",
+                entry,
+                plugin_name,
+                plugin_priority,
+            )
         except Exception:  # noqa: BLE001
             logger.exception(
                 "CAAS_PLUGINS: failed to instantiate or register %r — skipping.",
                 entry,
             )
             continue
-        logger.info("CAAS_PLUGINS: registered %r (priority %r).", entry, plugin.priority)
 
 
 def register_default_plugins(job_store, docker_client) -> None:

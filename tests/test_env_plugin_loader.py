@@ -202,3 +202,35 @@ def test_non_class_attribute_is_skipped(isolated_loader, caplog):
             loader()
     assert "_MODULE_LEVEL_STRING" in caplog.text
     assert registry.names() == ["dummy-env-loaded"]
+
+
+def test_getattr_exception_is_skipped(isolated_loader, caplog):
+    """A module whose attribute lookup raises (e.g. PEP 562 __getattr__) is logged and skipped."""
+    import app.plugins as _mod
+
+    registry, loader = isolated_loader
+    # Build a fake module whose getattr raises RuntimeError
+    import types
+    bad_module = types.ModuleType("bad_dynamic_module")
+
+    def _raising_getattr(name):
+        raise RuntimeError("dynamic attribute error")
+
+    bad_module.__getattr__ = _raising_getattr  # type: ignore[attr-defined]
+
+    real_import = _mod.importlib.import_module
+
+    def _patched_import(name, *args, **kwargs):
+        if name == "bad_dynamic_module":
+            return bad_module
+        return real_import(name, *args, **kwargs)
+
+    fake_importlib = MagicMock(wraps=_mod.importlib)
+    fake_importlib.import_module.side_effect = _patched_import
+
+    with patch.object(_mod, "importlib", fake_importlib):
+        with patch.dict("os.environ", {"CAAS_PLUGINS": f"bad_dynamic_module.SomePlugin,{_DUMMY_PATH}"}):
+            with caplog.at_level("ERROR", logger="caas.dispatcher"):
+                loader()
+    assert "dynamic attribute error" in caplog.text
+    assert registry.names() == ["dummy-env-loaded"]

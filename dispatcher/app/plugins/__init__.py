@@ -83,9 +83,16 @@ def _load_env_plugins() -> None:
                 entry,
             )
             continue
-        if not (inspect.isclass(cls) and issubclass(cls, CaasPlugin)):
+        if not inspect.isclass(cls):
             logger.error(
-                "CAAS_PLUGINS: %r is not a CaasPlugin subclass (entry %r) — skipping.",
+                "CAAS_PLUGINS: %r is not a class (entry %r) — skipping.",
+                class_name,
+                entry,
+            )
+            continue
+        if not issubclass(cls, CaasPlugin):
+            logger.error(
+                "CAAS_PLUGINS: %r is a class but not a CaasPlugin subclass (entry %r) — skipping.",
                 class_name,
                 entry,
             )

@@ -151,6 +151,30 @@ def test_on_job_complete_fires_for_cell_job(
     assert exit_code == 0
 
 
+def test_on_job_complete_fires_for_cell_job_on_error_path(
+    api_client, mock_docker_client, recording_plugin
+):
+    """on_job_complete fires exactly once even when execute_cell hits a
+    NotFound error after the container is registered (error path)."""
+    from docker.errors import NotFound
+
+    container = mock_docker_client.containers.create.return_value
+    set_cell_logs(container, stdout=b"")
+
+    # Simulate container disappearing before container.wait() returns
+    container.wait.side_effect = NotFound("container gone")
+
+    resp = api_client.post(CELL_URL, json={"code": "import time; time.sleep(10)", "image": "python:3.11-slim"})
+    # NotFound is translated to a stopped response
+    assert resp.status_code == 200
+
+    # Hook must have fired exactly once from the error handler
+    assert len(recording_plugin.complete_calls) == 1
+    record, exit_code = recording_plugin.complete_calls[0]
+    assert record.job_id == container.id
+    assert exit_code == -1
+
+
 def test_on_job_complete_not_fired_on_stop_already_stopped(
     api_client, mock_docker_client, recording_plugin
 ):

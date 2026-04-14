@@ -366,6 +366,7 @@ def execute_cell(req: CellRequest, authorized: bool = Depends(get_api_key)):
     _acquire_slot(resource)
     container = None
     record = None
+    fired_complete_hook = False
     try:
         cmd = ["python", "-c", req.code]
         run_kwargs = _prepare_run(req)
@@ -407,6 +408,7 @@ def execute_cell(req: CellRequest, authorized: bool = Depends(get_api_key)):
         registry.post_run(record, response)
         completed_record = job_store.get(record.job_id)
         registry.on_job_complete(completed_record or record, exit_code)
+        fired_complete_hook = True
 
         try:
             container.remove()
@@ -422,6 +424,10 @@ def execute_cell(req: CellRequest, authorized: bool = Depends(get_api_key)):
             already_stopped = existing is not None and existing.status == "stopped"
             if not already_stopped:
                 job_store.mark_stopped(record.job_id, exit_code=-1)
+            if not fired_complete_hook:
+                stopped_record = job_store.get(record.job_id)
+                registry.on_job_complete(stopped_record or record, -1)
+                fired_complete_hook = True  # noqa: F841 — guards re-entry
             if isinstance(e, NotFound) and already_stopped:
                 return JSONResponse({"status": "stopped", "exit_code": existing.exit_code,
                                      "stdout": "", "stderr": "", "logs": ""})

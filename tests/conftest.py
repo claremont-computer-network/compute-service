@@ -111,6 +111,11 @@ def mock_docker_client(monkeypatch):
         main_module.MAX_SHM_SIZE_MB = 8192
         main_module.job_store = type(main_module.job_store)()  # fresh store per test
         main_module.resource_slots = main_module.ResourceSlots.from_env()  # fresh slots per test
+        # Re-inject fresh services so plugins that use self.services see the
+        # new job_store instance (configure_services ran at module import time
+        # with the old store object).
+        from app.core.plugin import registry
+        registry.configure_services(main_module.job_store, dc)
 
         yield dc
 

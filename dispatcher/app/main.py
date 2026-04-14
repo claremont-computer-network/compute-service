@@ -405,6 +405,8 @@ def execute_cell(req: CellRequest, authorized: bool = Depends(get_api_key)):
 
         # Plugins react to completion (log retention, sampler stop, etc.).
         registry.post_run(record, response)
+        completed_record = job_store.get(record.job_id)
+        registry.on_job_complete(completed_record or record, exit_code)
 
         try:
             container.remove()
@@ -440,6 +442,7 @@ def execute_cell(req: CellRequest, authorized: bool = Depends(get_api_key)):
 def _enrich_job_data(job, data: dict) -> None:
     """Mutate a job data dict in-place with live container state."""
     _TERMINAL_STATES = {"exited", "dead"}
+    enriched_record = job  # may be replaced with a refreshed record below
     if job.status == "running" and job.docker_backed:
         try:
             container = client.containers.get(job.container_id)
@@ -451,7 +454,8 @@ def _enrich_job_data(job, data: dict) -> None:
                 data["status"] = "stopped"
                 data["exit_code"] = exit_code
                 refreshed = job_store.get(job.job_id)
-                registry.on_job_complete(refreshed or job, exit_code)
+                enriched_record = refreshed or job
+                registry.on_job_complete(enriched_record, exit_code)
             elif docker_status == "running":
                 stats = _fetch_resources(container)
                 data["resources"] = stats.model_dump() if stats else None
@@ -459,10 +463,11 @@ def _enrich_job_data(job, data: dict) -> None:
             job_store.mark_stopped(job.job_id)
             data["status"] = "stopped"
             refreshed = job_store.get(job.job_id)
-            registry.on_job_complete(refreshed or job, None)
+            enriched_record = refreshed or job
+            registry.on_job_complete(enriched_record, None)
         except DockerException:
             pass
-    registry.on_enrich(job, data)
+    registry.on_enrich(enriched_record, data)
 
 
 @app.get("/v1/jobs")
@@ -511,8 +516,12 @@ def stop_job(job_id: str, authorized: bool = Depends(get_api_key)):
     except DockerException as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-    stopped_record = job_store.get(job_id)
-    registry.on_job_complete(stopped_record or job, None)
+    # Only fire the completion hook if the job was actually running before
+    # this request — prevents double-firing if DELETE is retried on an
+    # already-stopped job.
+    if job.status == "running":
+        stopped_record = job_store.get(job_id)
+        registry.on_job_complete(stopped_record or job, None)
 
     return JSONResponse({"job_id": job_id, "status": "stopped"})
 

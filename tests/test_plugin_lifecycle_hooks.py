@@ -10,6 +10,7 @@ import pytest
 
 from app.core.plugin import CaasPlugin, PluginRegistry, PluginServices
 from app.jobs import JobStore
+from conftest import set_cell_logs
 
 
 # ---------------------------------------------------------------------------
@@ -130,6 +131,41 @@ def test_on_job_complete_not_fired_twice_for_already_stopped(
     api_client.get(f"/v1/jobs/{container.id}")  # first GET — marks stopped, fires hook
     api_client.get(f"/v1/jobs/{container.id}")  # second GET — already stopped, no re-fire
 
+    assert len(recording_plugin.complete_calls) == 1
+
+
+def test_on_job_complete_fires_for_cell_job(
+    api_client, mock_docker_client, recording_plugin
+):
+    """on_job_complete fires for a synchronous cell job at completion."""
+    container = mock_docker_client.containers.create.return_value
+    set_cell_logs(container, stdout=b"ok\n")
+
+    resp = api_client.post(CELL_URL, json={"code": "print('ok')", "image": "python:3.11-slim"})
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "exited"
+
+    assert len(recording_plugin.complete_calls) == 1
+    record, exit_code = recording_plugin.complete_calls[0]
+    assert record.job_id == container.id
+    assert exit_code == 0
+
+
+def test_on_job_complete_not_fired_on_stop_already_stopped(
+    api_client, mock_docker_client, recording_plugin
+):
+    """DELETE on an already-stopped job must not re-fire on_job_complete."""
+    container = mock_docker_client.containers.run.return_value
+    container.id = "idempotent_stop_001"
+
+    api_client.post(EXEC_URL, json={"image": "python:3.11-slim", "detach": True})
+
+    # First DELETE — job is running, hook should fire
+    api_client.delete(f"/v1/jobs/{container.id}")
+    assert len(recording_plugin.complete_calls) == 1
+
+    # Second DELETE — job is already stopped, hook must NOT fire again
+    api_client.delete(f"/v1/jobs/{container.id}")
     assert len(recording_plugin.complete_calls) == 1
 
 

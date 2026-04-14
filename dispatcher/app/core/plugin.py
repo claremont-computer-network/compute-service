@@ -66,10 +66,11 @@ if t.TYPE_CHECKING:
 class PluginServices:
     """Shared dispatcher objects exposed to plugins.
 
-    Passed to each plugin via :meth:`CaasPlugin.setup` when
-    :meth:`PluginRegistry.configure_services` is called.  Plugins should
-    access the job store and Docker client through this object rather than
-    importing ``app.main`` directly, which makes them independently testable.
+    Assigned to each plugin's ``services`` attribute by
+    :meth:`PluginRegistry.configure_services` before any hooks are invoked.
+    Plugins should access the job store and Docker client through this
+    object rather than importing ``app.main`` directly, which makes them
+    independently testable.
 
     Attributes:
         job_store: The active :class:`~app.jobs.JobStore` instance.
@@ -79,9 +80,6 @@ class PluginServices:
     def __init__(self, job_store: "JobStore", docker_client: t.Any) -> None:
         self.job_store = job_store
         self.docker_client = docker_client
-
-if t.TYPE_CHECKING:
-    from app.jobs import JobRecord, JobStore
 
 
 class CaasPlugin:

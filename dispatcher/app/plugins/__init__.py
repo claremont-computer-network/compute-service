@@ -127,13 +127,14 @@ def _load_env_plugins() -> None:
 
 def register_default_plugins(job_store, docker_client) -> None:
     """Register all built-in :class:`~app.core.plugin.CaasPlugin` instances,
-    configure shared services, then load any additional plugins from the
-    ``CAAS_PLUGINS`` env var.
+    load any additional plugins from the ``CAAS_PLUGINS`` env var, then
+    configure shared services.
 
     Clears any previously registered plugins first so that calling this
     function more than once (e.g. during test reloads) does not accumulate
-    duplicate entries.  Services configuration is applied after registration
-    so both built-in and env-loaded plugins receive the same services object.
+    duplicate entries.  Services configuration is applied after all plugins
+    (built-in and env-loaded) are registered so every plugin receives the
+    same services object.
 
     Args:
         job_store: The active :class:`~app.jobs.JobStore` instance.

@@ -127,17 +127,17 @@ def _load_env_plugins() -> None:
 
 def register_default_plugins(job_store, docker_client) -> None:
     """Register all built-in :class:`~app.core.plugin.CaasPlugin` instances,
-    then load any additional plugins from the ``CAAS_PLUGINS`` env var.
+    configure shared services, then load any additional plugins from the
+    ``CAAS_PLUGINS`` env var.
 
     Clears any previously registered plugins first so that calling this
     function more than once (e.g. during test reloads) does not accumulate
-    duplicate entries.
+    duplicate entries.  Services configuration is applied after registration
+    so both built-in and env-loaded plugins receive the same services object.
 
     Args:
-        job_store: The active :class:`~app.jobs.JobStore` instance (unused
-            directly — plugins read ``app.main.job_store`` at call-time).
-        docker_client: The active Docker SDK client (unused directly —
-            plugins read ``app.main.client`` at call-time).
+        job_store: The active :class:`~app.jobs.JobStore` instance.
+        docker_client: The active Docker SDK client.
     """
     registry.clear()
     registry.register(NvidiaEntrypointPlugin())
@@ -146,3 +146,4 @@ def register_default_plugins(job_store, docker_client) -> None:
     registry.register(ResourceSamplerPlugin())
     registry.register(LogRetentionPlugin())
     _load_env_plugins()
+    registry.configure_services(job_store, docker_client)

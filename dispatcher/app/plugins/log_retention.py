@@ -49,8 +49,10 @@ class LogRetentionPlugin(CaasPlugin):
         If *result* does not contain a ``"logs"`` key (e.g. the container
         exited via an error path that set no logs) this is a no-op.
         """
-        import app.main as _main  # pylint: disable=import-outside-toplevel
-
         logs = result.get("logs")
         if logs is not None:
-            _main.job_store.store_logs(record.job_id, logs)
+            if self.services is not None:
+                self.services.job_store.store_logs(record.job_id, logs)
+            else:
+                import app.main as _main  # pylint: disable=import-outside-toplevel
+                _main.job_store.store_logs(record.job_id, logs)

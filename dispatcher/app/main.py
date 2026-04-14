@@ -440,27 +440,29 @@ def execute_cell(req: CellRequest, authorized: bool = Depends(get_api_key)):
 def _enrich_job_data(job, data: dict) -> None:
     """Mutate a job data dict in-place with live container state."""
     _TERMINAL_STATES = {"exited", "dead"}
-    if job.status != "running":
-        return
-    if not job.docker_backed:
-        return
-    try:
-        container = client.containers.get(job.container_id)
-        container.reload()
-        docker_status = container.status
-        if docker_status in _TERMINAL_STATES:
-            exit_code = container.attrs.get("State", {}).get("ExitCode")
-            job_store.mark_stopped(job.job_id, exit_code=exit_code)
+    if job.status == "running" and job.docker_backed:
+        try:
+            container = client.containers.get(job.container_id)
+            container.reload()
+            docker_status = container.status
+            if docker_status in _TERMINAL_STATES:
+                exit_code = container.attrs.get("State", {}).get("ExitCode")
+                job_store.mark_stopped(job.job_id, exit_code=exit_code)
+                data["status"] = "stopped"
+                data["exit_code"] = exit_code
+                refreshed = job_store.get(job.job_id)
+                registry.on_job_complete(refreshed or job, exit_code)
+            elif docker_status == "running":
+                stats = _fetch_resources(container)
+                data["resources"] = stats.model_dump() if stats else None
+        except NotFound:
+            job_store.mark_stopped(job.job_id)
             data["status"] = "stopped"
-            data["exit_code"] = exit_code
-        elif docker_status == "running":
-            stats = _fetch_resources(container)
-            data["resources"] = stats.model_dump() if stats else None
-    except NotFound:
-        job_store.mark_stopped(job.job_id)
-        data["status"] = "stopped"
-    except DockerException:
-        pass
+            refreshed = job_store.get(job.job_id)
+            registry.on_job_complete(refreshed or job, None)
+        except DockerException:
+            pass
+    registry.on_enrich(job, data)
 
 
 @app.get("/v1/jobs")
@@ -508,6 +510,9 @@ def stop_job(job_id: str, authorized: bool = Depends(get_api_key)):
         pass
     except DockerException as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+    stopped_record = job_store.get(job_id)
+    registry.on_job_complete(stopped_record or job, None)
 
     return JSONResponse({"job_id": job_id, "status": "stopped"})
 

@@ -254,7 +254,7 @@ class CaasClient:
         resp = self._call("GET", f"{self._base}/api/templates", headers=self._headers())
         return self._check(resp).json()
 
-    def templates_upsert(self, name: str = "", image: str = "",
+    def templates_upsert(self, name: t.Optional[str] = None, image: t.Optional[str] = None,
                          cmd: t.Optional[t.Union[str, t.List[str]]] = None,
                          env: t.Optional[t.Dict[str, str]] = None,
                          volumes: t.Optional[list] = None,
@@ -262,7 +262,8 @@ class CaasClient:
                          id: t.Optional[str] = None) -> dict:
         """Create or update a job template.
 
-        If *id* is provided and matches an existing template, it is updated.
+        If *id* is provided and matches an existing template, it is updated
+        (only the provided fields are sent to the server).
         Otherwise a new template is created.
 
         Returns:

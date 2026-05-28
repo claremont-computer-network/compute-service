@@ -651,12 +651,12 @@ def test_schedules_upsert_with_template(client, mock_transport):
 
 
 def test_schedule_cancel(client, mock_transport):
-    """schedule_cancel returns {"deleted": id}."""
+    """schedule_cancel returns {"cancelled": id}."""
     mock_transport[("DELETE", f"{BASE_URL}/api/schedule/sch_abc")] = _make_response(
-        200, {"deleted": "sch_abc"}
+        200, {"cancelled": "sch_abc"}
     )
     result = client.schedule_cancel("sch_abc")
-    assert result["deleted"] == "sch_abc"
+    assert result["cancelled"] == "sch_abc"
 
 
 # ---------------------------------------------------------------------------

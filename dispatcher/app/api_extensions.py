@@ -28,7 +28,7 @@ import asyncio
 import os
 import typing as t
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -101,16 +101,27 @@ def _fill_schedule_defaults(item: dict) -> dict:
 
 
 def _resolve_data_store():
+    """Resolve data_store from app.main.
+
+    Lazy import is needed because tests delete ``sys.modules["app.main"]``
+    and reimport it with a patched client/job_store. A direct module-level
+    import would retain the original (unpatched) reference.
+    """
     return _import_main().data_store
 
 
 def _resolve_job_store():
+    """Resolve job_store from app.main (same lazy-import reasoning as above)."""
     return _import_main().job_store
 
 
 # ── File browsing helpers ─────────────────────────────────────────────────────
+# NOTE: `_is_allowed_path` duplicates the allowlist logic in
+# `dispatcher/app/plugins/volumes.py`.  Both use string prefix comparison
+# after `os.path.realpath`.  A future PR should consolidate them into a
+# single shared utility (e.g. using `pathlib.Path.is_relative_to`).
 
-def _is_allowed_path(path: str, allowed: list[str]) -> True:
+def _is_allowed_path(path: str, allowed: list[str]) -> bool:
     """Return True if *path* is under any of the allowed directories.
 
     Fails closed when *allowed* is empty or None.
@@ -129,14 +140,6 @@ def _is_allowed_path(path: str, allowed: list[str]) -> True:
 
 def _entries_from_path(path: str) -> list[dict]:
     """Return directory entries using os.scandir (no subprocess)."""
-    p = Path(path)
-    try:
-        scanner = p.stat()
-    except FileNotFoundError:
-        raise FileNotFoundError(f"Path not found: {path}")
-    except PermissionError as exc:
-        raise PermissionError(f"Permission denied: {path}") from exc
-
     entries: list[dict] = []
     try:
         for entry in os.scandir(path):
@@ -175,26 +178,31 @@ async def _scan_schedules() -> None:
         except Exception:
             continue
         now = datetime.now(timezone.utc)
-        updated: t.List[t.Dict] = []
         for item in schedules:
-            if item.get("status") != "pending":
+            try:
+                if item.get("status") != "pending":
+                    continue
+                created_str = item.get("created_at")
+                delay = item.get("delay_seconds", 0)
+                if created_str and delay > 0:
+                    created_dt = datetime.fromisoformat(created_str.replace("Z", "+00:00"))
+                    if now - created_dt >= timedelta(seconds=delay):
+                        sched_id = item.get("id")
+                        ds.update("schedules", sched_id, {
+                            "triggered_at": _now_iso(),
+                            "status": "active",
+                        })
+                        try:
+                            _run_schedule(sched_id, item)
+                        except Exception:
+                            ds.update("schedules", sched_id, {
+                                "status": "error",
+                                "triggered_at": _now_iso(),
+                            })
+                        await asyncio.sleep(0)  # yield to event loop between runs
+            except Exception:
+                # Per-item errors should not kill the scanner task.
                 continue
-            created_str = item.get("created_at")
-            delay = item.get("delay_seconds", 0)
-            if created_str and delay > 0:
-                created_dt = datetime.fromisoformat(created_str.replace("Z", "+00:00"))
-                if now - created_dt >= __import__("datetime").timedelta(seconds=delay):
-                    sched_id = item.get("id")
-                    ds.update("schedules", sched_id, {
-                        "triggered_at": _now_iso(),
-                        "status": "active",
-                    })
-                    try:
-                        _run_schedule(sched_id, item)
-                    except Exception:
-                        ds.update("schedules", sched_id, {"status": "error", "triggered_at": _now_iso()})
-                        updated.append(dict(item))
-                    await asyncio.sleep(0)  # yield to event loop between runs
 
 
 # ── Template endpoints ────────────────────────────────────────────────────────
@@ -219,6 +227,16 @@ def templates_upsert(req: TemplateUpsert):
         for i, item in enumerate(items):
             if item.get("id") == existing_id:
                 values = req.model_dump(exclude_none=True)
+                v = values.get("volumes")
+                if v:
+                    m = _import_main()
+                    for vol in v:
+                        hp = vol.get("host_path") if isinstance(vol, dict) else None
+                        if hp and not _is_allowed_path(hp, m.ALLOWED_HOST_DIRS):
+                            raise HTTPException(
+                                status_code=400,
+                                detail=f"Volume host_path {hp!r} is not under any allowed host directory: {m.ALLOWED_HOST_DIRS}",
+                            )
                 for key, val in values.items():
                     items[i][key] = val
                 if "created_at" not in items[i]:
@@ -229,13 +247,22 @@ def templates_upsert(req: TemplateUpsert):
         return JSONResponse(status_code=404, content={"detail": "Template not found"})
 
     new_id = f"tpl_{uuid.uuid4().hex[:12]}"
+    m = _import_main()
+    volumes = req.volumes or []
+    for vol in volumes:
+        hp = vol.get("host_path") if isinstance(vol, dict) else None
+        if hp and not _is_allowed_path(hp, m.ALLOWED_HOST_DIRS):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Volume host_path {hp!r} is not under any allowed host directory: {m.ALLOWED_HOST_DIRS}",
+            )
     item = {
         "id": new_id,
         "name": req.name or "",
         "image": req.image or "",
         "cmd": req.cmd or [],
         "env": req.env or {},
-        "volumes": req.volumes or [],
+        "volumes": volumes,
         "gpu": req.gpu,
         "created_at": now,
         "modified_at": now,
@@ -331,7 +358,20 @@ def schedule_create(
     result = _fill_schedule_defaults(dict(schedule_item))
 
     if req.delay_seconds == 0:
-        _run_schedule(sched_id, schedule_item)
+        try:
+            _run_schedule(sched_id, schedule_item)
+        except HTTPException:
+            ds.update("schedules", sched_id, {
+                "status": "error",
+                "triggered_at": _now_iso(),
+            })
+            raise
+        except Exception:
+            ds.update("schedules", sched_id, {
+                "status": "error",
+                "triggered_at": _now_iso(),
+            })
+            _import_main().logger.error("Schedule %s immediate execution failed", sched_id, exc_info=True)
 
     return JSONResponse(result, status_code=201)
 
@@ -465,6 +505,8 @@ def staging_delete(
 
 
 # ── Filtered job list ────────────────────────────────────────────────────────
+# NOTE: This endpoint duplicates `/v1/jobs` with only a `?state=` filter.
+# A future PR may extend `/v1/jobs` with `?state=` and deprecate this route.
 
 @router.get("/api/jobs")
 def jobs_filter(
@@ -518,7 +560,7 @@ def deployment_status(
             container = m.client.containers.get(job.container_id)
             container.reload()
         except m.NotFound:
-            job = m.job_store.mark_stopped(job.job_id) or job
+            _ = m.job_store.mark_stopped(job.job_id)
         except m.DockerException:
             pass
 

@@ -18,12 +18,14 @@ Stored in `dispatcher/.env` (loaded automatically by Docker Compose and by `pyth
 | `MAX_CONCURRENT_CPU_JOBS` | No | Maximum number of CPU (non-GPU) jobs that can run simultaneously. Default: `4`. |
 | `QUEUE_TIMEOUT_SECS` | No | How long (seconds) a job submission will wait for a free resource slot before the dispatcher returns HTTP 503. Set to `0` for fail-fast behaviour. Default: `300`. |
 | `CAAS_PLUGINS` | No | Comma-separated list of fully-qualified plugin class paths to load at startup, e.g. `my_pkg.AuditPlugin,other_pkg.MetricsPlugin`. Each entry must resolve to a `CaasPlugin` subclass installed in the dispatcher's Python environment; it is instantiated with no arguments. |
+| `CAAS_DATA_DIR` | No | Persistent data directory for the dispatcher's file-based stores (templates, schedules, staging areas, configs). Mounted as a Docker named volume. Default: `/srv/caas-data`. |
 
 **Example `dispatcher/.env`:**
 
 ```bash
 DISPATCHER_API_KEY=a-strong-random-secret-here
 ALLOWED_HOST_DIRS=/home/eriksson/data,/mnt/datasets
+CAAS_DATA_DIR=/srv/caas-data
 MAX_CONCURRENT_GPU_JOBS=1
 MAX_CONCURRENT_CPU_JOBS=4
 QUEUE_TIMEOUT_SECS=300

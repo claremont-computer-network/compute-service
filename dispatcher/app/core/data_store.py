@@ -42,15 +42,8 @@ import typing as t
 
 logger = logging.getLogger("caas.data_store")
 
-# Default data directory – must be bind-mounted so data survives container restart.
+# Default data directory – must be bind-mounted so data survives container restarts.
 DEFAULT_DATA_DIR = os.path.join("/srv", "caas-data")
-
-# Categories and their key field names.
-_DEFAULTS: dict[str, dict] = {
-    "staging": {"default_name": "unnamed", "default_host_path": "", "default_dest_path": "", "default_created_at": None},
-    "schedules": {"default_name": "unnamed", "default_status": "pending", "default_template_id": None, "default_delay_seconds": 300, "default_created_at": None, "default_triggered_at": None, "default_jobs": []},
-    "templates": {"default_name": "unnamed", "default_image": "", "default_cmd": [], "default_env": {}, "default_volumes": [], "default_gpu": None, "default_created_at": None, "default_modified_at": None},
-}
 
 def _now_iso() -> str:
     from datetime import datetime, timezone
@@ -167,11 +160,10 @@ class DataStore:
         lock = self._get_lock(category)
         with lock:
             items = self._load(category)
-            defaults = _DEFAULTS.get(category, {})
             for i, item in enumerate(items):
                 if item.get("id") == key_id:
                     if field not in item or not isinstance(item.get(field), list):
-                        item[field] = list(defaults.get(field, []))
+                        item[field] = []
                     item[field].append(value)
                     self._save(category, items)
                     return True

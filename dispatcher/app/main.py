@@ -25,6 +25,7 @@ Plugin extension points
 ``registry.post_run(record, result)``
     Called after the container exits and logs are captured.
 """
+import asyncio
 import os
 import typing as t
 import logging
@@ -163,7 +164,12 @@ async def lifespan(app: FastAPI):
         )
     logger.info("Loaded plugins: %s", registry.names())
     job_store.hydrate_from_docker(client)
+
+    # Start the schedule scanner that periodically wakes pending schedules.
+    import app.api_extensions as _ext
+    task = asyncio.ensure_future(_ext._scan_schedules())
     yield
+    task.cancel()
 
 
 app = FastAPI(title="Compute Service Dispatcher", lifespan=lifespan)
@@ -198,7 +204,8 @@ job_store = JobStore()
 
 # ── Persistent data store ────────────────────────────────────────────────────
 # Mounted at /srv/caas-data in the container so data survives restarts.
-# Initialized lazily so tests that don't need it don't fail on permission errors.
+# Eagerly initialised at import time so that _get_data_store() is always
+# available for lazy consumers (extension endpoints) without None guards.
 
 _DATA_DIR = os.getenv("CAAS_DATA_DIR") or DEFAULT_DATA_DIR
 _data_store: t.Optional[DataStore] = None
@@ -278,24 +285,6 @@ class CellRequest(ContainerOptions):
             "a multi-page banner to stdout before exec-ing the user command."
         ),
     )
-
-# ── Auth ──────────────────────────────────────────────────────────────────────
-# Auth is intentionally kept here rather than extracted to a separate module.
-# Tests monkey-patch ``app.main.API_KEY`` directly; moving the variable to
-# another module would require every test that sets it to also patch that
-# module, making the test setup more fragile for no runtime benefit.
-
-def get_api_key(x_api_key: t.Optional[str] = Header(None)):
-    """FastAPI dependency: validate the ``X-Api-Key`` header against ``API_KEY``."""
-    if not API_KEY:
-        return True
-    if not x_api_key or x_api_key != API_KEY:
-        raise HTTPException(status_code=401, detail="Invalid API Key")
-    return True
-
-
-_api_auth = get_api_key  # alias so api_extensions can reference it without circular import
-
 
 # ── Docker helpers ────────────────────────────────────────────────────────────
 

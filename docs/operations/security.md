@@ -80,6 +80,15 @@ The dispatcher enforces an explicit allowlist of host paths that may be bind-mou
 
 ---
 
+## `CAAS_DATA_DIR`
+
+The persistent data directory for the dispatcher's file-based stores (templates, schedules, staging areas, configs). It is mounted as a Docker named volume at `/srv/caas-data` inside the container.
+
+- Ensure the mounted directory is not world-writable if you intend to run with API key authentication, since any API caller with template access could write files here.
+- Regular backups of this directory suffice to preserve operator-defined templates, schedules, and staging configurations.
+
+---
+
 ## Secrets in cells
 
 Don't put secrets directly in `%%dispatch` cells — they'll appear in the notebook file and any output logs.

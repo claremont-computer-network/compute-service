@@ -15,11 +15,7 @@ Tests for the extension API endpoints:
   GET    /api/deployments/{job_id}/status
 """
 import os
-import json
-import tempfile
-import shutil
 import pytest
-import docker.errors
 
 
 # ── Test base URL helpers ──────────────────────────────────────────────────────
@@ -326,14 +322,20 @@ def test_jobs_filter_running(api_client, mock_docker_client, tmp_path):
 def test_jobs_filter_stopped(api_client, mock_docker_client, tmp_path):
     """GET /api/jobs?state=stopped returns only stopped jobs."""
     _reset_data_dir(api_client, str(tmp_path / "data"))
-    # Create a running job, then manually mark it stopped.
+    # Create one running job then manually add a stopped one with a different ID.
     _submit_detach(api_client)
     import app.main as m
-    m.job_store.mark_stopped(m.job_store.list_all()[0].job_id)
-    resp = api_client.get(FILTER_URL, params={"state": "stopped"})
-    assert resp.status_code == 200
-    assert len(resp.json()) >= 1
-    for job in resp.json():
+    m.job_store.register_sync(
+        job_id="manual_stopped_job_id",
+        image="alpine:3.18",
+    )
+    m.job_store.mark_stopped("manual_stopped_job_id", exit_code=1)
+    stopped_resp = api_client.get(FILTER_URL, params={"state": "stopped"})
+    all_resp = api_client.get(FILTER_URL)
+    assert stopped_resp.status_code == 200
+    assert all_resp.status_code == 200
+    assert len(stopped_resp.json()) < len(all_resp.json())
+    for job in stopped_resp.json():
         assert job["status"] == "stopped"
 
 
@@ -396,6 +398,8 @@ def test_deployment_status_stopped_failure(api_client, mock_docker_client, tmp_p
 def test_deployment_status_not_found(api_client, mock_docker_client, tmp_path):
     """A non-existent job ID returns 404."""
     _reset_data_dir(api_client, str(tmp_path / "data"))
+    import docker.errors
+    mock_docker_client.containers.get.side_effect = docker.errors.NotFound("not found")
     resp = api_client.get(f"{DEPL_URL}/nonexistent_job_id/status")
     assert resp.status_code == 404
     assert "No job found" in resp.json()["detail"]

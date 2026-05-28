@@ -16,7 +16,6 @@ Tests for the extension API endpoints:
 """
 import os
 import pytest
-import docker.errors
 
 
 # ── Test base URL helpers ──────────────────────────────────────────────────────

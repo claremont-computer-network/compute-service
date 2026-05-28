@@ -154,10 +154,8 @@ def _entries_from_path(path: str) -> list[dict]:
                 "modified": datetime.fromtimestamp(stat_result.st_mtime, tz=timezone.utc).isoformat(),
                 "is_dir": entry.is_dir(follow_symlinks=False),
             })
-    except PermissionError as exc:
-        raise exc
-    except FileNotFoundError as exc:
-        raise exc
+    except (PermissionError, FileNotFoundError):
+        raise
     return entries
 
 

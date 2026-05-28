@@ -40,6 +40,7 @@ from docker.errors import DockerException, NotFound, ContainerError
 from dotenv import load_dotenv
 from app.jobs import JobStore, _fetch_resources
 from app.core.plugin import registry
+from app.core.data_store import DataStore, DEFAULT_DATA_DIR
 from app.plugins import register_default_plugins
 
 load_dotenv()  # optional .env
@@ -195,10 +196,45 @@ if _ui_dir is not None:
 client = docker.from_env()
 job_store = JobStore()
 
+# ── Persistent data store ────────────────────────────────────────────────────
+# Mounted at /srv/caas-data in the container so data survives restarts.
+# Initialized lazily so tests that don't need it don't fail on permission errors.
+
+_DATA_DIR = os.getenv("CAAS_DATA_DIR") or DEFAULT_DATA_DIR
+_data_store: t.Optional[DataStore] = None
+
+
+def _get_data_store() -> DataStore:
+    global _data_store
+    if _data_store is None:
+        _data_store = DataStore(_DATA_DIR)
+    return _data_store
+
+
+# For module-level access (extensions import via _get_data_store).
+data_store = _get_data_store()
+
 # Register built-in plugins immediately so they are available even when the
 # lifespan context manager is not entered (e.g. in tests that use TestClient
 # without the context manager protocol).
 register_default_plugins(job_store, client)
+
+# ── Auth (needs to be before the router import so FastAPI can resolve it) ──────
+# Tests monkey-patch ``app.main.API_KEY`` directly.
+
+def get_api_key(x_api_key: t.Optional[str] = Header(None)):
+    """FastAPI dependency: validate the ``X-Api-Key`` header against ``API_KEY``."""
+    if not API_KEY:
+        return True
+    if not x_api_key or x_api_key != API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid API Key")
+    return True
+
+
+# ── Extension API router ─────────────────────────────────────────────────────
+# Must be imported after client, job_store, and data_store are set up.
+from app.api_extensions import router as api_router  # noqa: E402
+app.include_router(api_router, dependencies=[Depends(get_api_key)])
 
 
 # ── Request / response models ─────────────────────────────────────────────────
@@ -256,6 +292,9 @@ def get_api_key(x_api_key: t.Optional[str] = Header(None)):
     if not x_api_key or x_api_key != API_KEY:
         raise HTTPException(status_code=401, detail="Invalid API Key")
     return True
+
+
+_api_auth = get_api_key  # alias so api_extensions can reference it without circular import
 
 
 # ── Docker helpers ────────────────────────────────────────────────────────────

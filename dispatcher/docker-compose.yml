@@ -14,11 +14,17 @@ services:
       - DISPATCHER_API_KEY=${DISPATCHER_API_KEY:-}
       - ALLOWED_HOST_DIRS=${ALLOWED_HOST_DIRS:-/mnt,/data}
       - ALLOW_IPC_HOST=${ALLOW_IPC_HOST:-false}
+      # Persistent data directory for templates, schedules, staging areas.
+      - CAAS_DATA_DIR=${CAAS_DATA_DIR:-/srv/caas-data}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - caas-data:/srv/caas-data
     # Run as root so the dispatcher can reach the Docker socket.
     # The socket is owned by root:docker on the host; the caas user inside
     # the container is not in that group.  Restricting to non-root requires
     # either matching the host docker GID at build time or a group_add entry.
     user: root
     restart: unless-stopped
+
+volumes:
+  caas-data:

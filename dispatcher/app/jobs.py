@@ -247,6 +247,13 @@ class JobStore:
         with self._lock:
             return [r.model_copy(deep=True) for r in self._jobs.values()]
 
+    def get_by_state(self, state: str) -> list[JobRecord]:
+        """Return jobs matching *state* ('*' for all, 'running', 'stopped')."""
+        with self._lock:
+            if state == "*":
+                return [r.model_copy(deep=True) for r in self._jobs.values()]
+            return [r.model_copy(deep=True) for r in self._jobs.values() if r.status == state]
+
     # ── startup recovery ──────────────────────────────────────────────────────
 
     def hydrate_from_docker(self, docker_client) -> None:

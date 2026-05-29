@@ -167,7 +167,7 @@ Output appears inline, as if the cell ran locally.
 ## 6. Use the Web UI
 
  A lightweight job monitor is served from the dispatcher itself.  
-  Open `http://<host>:8000/ui/` in a browser, enter your API key once. The **Monitor** tab shows all known jobs with live CPU/memory sparklines. The **Launch** tab has a "Load Template" dropdown and a "Load Staging Area" selector — pre-populated fields always defer to user input. The **Templates** tab lets you create, edit, and delete job templates that map directly to the job launch form fields. The **Schedules** tab lets you queue delayed or immediate jobs — fill in a template or custom fields and set the delay in seconds. Select a GPU, mount volumes, and watch jobs appear in the Monitor tab and schedules list.
+  Open `http://<host>:8000/ui/` in a browser, enter your API key once. The **Monitor** tab shows all known jobs with live CPU/memory sparklines. The **Launch** tab has a "Load Template" dropdown and a "Load Staging Area" selector — pre-populated fields always defer to user input. The **Templates** tab lets you create, edit, and delete job templates that map directly to the job launch form fields. The **Schedules** tab lets you queue delayed or immediate jobs — fill in a template or custom fields and set the delay in seconds. The **Files** tab provides a browsable file explorer for any mounted host directory. Select a GPU, mount volumes, and watch jobs appear in the Monitor tab and schedules list.
 
 ---
 

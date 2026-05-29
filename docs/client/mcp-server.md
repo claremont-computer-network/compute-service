@@ -11,7 +11,7 @@ The MCP server runs as a **standalone stdio process** on the agent's machine. It
 ```
 LLM agent ───MCP stdio───▶ caas-mcp server ───HTTP───▶ Dispatcher (remote machine)
                                           │
-                                          └──▶ caas-mcp server ───MCP stdio───▶ caas client
+                                          └──▶ CaasClient (in-process HTTP client)
 ```
 
 ---

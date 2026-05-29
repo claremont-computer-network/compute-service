@@ -67,15 +67,29 @@ class TestParseEnv:
 
 class TestParseGpu:
 
-    def test_prefix_stripped(self):
-        assert _parse_gpu("gpu:2") == {"gpu": 2}
+    def test_device_ids_list(self):
+        result = _parse_gpu("0,1")
+        assert result == {"device_ids": ["0", "1"], "capabilities": ["gpu"]}
 
-    def test_raw_number(self):
-        """Input without prefix is parsed as int."""
-        assert _parse_gpu("4") == {"gpu": 4}
+    def test_single_device(self):
+        result = _parse_gpu("3")
+        assert result == {"device_ids": ["3"], "capabilities": ["gpu"]}
 
-    def test_raw_stays_string(self):
-        assert _parse_gpu("foo") == {"gpu": "foo"}
+    def test_legacy_prefix_stripped(self):
+        """Legacy 'gpu:N' prefix is stripped and converted to device_ids list."""
+        result = _parse_gpu("gpu:2")
+        assert result == {"device_ids": ["2"], "capabilities": ["gpu"]}
+
+    def test_all_devices(self):
+        result = _parse_gpu("all")
+        assert result == {"device_ids": "all", "capabilities": ["gpu"]}
+
+    def test_empty_returns_none(self):
+        assert _parse_gpu("") is None
+        assert _parse_gpu("   ") is None
+
+    def test_none_returns_none(self):
+        assert _parse_gpu(None) is None
 
 
 class TestToJson:
@@ -273,7 +287,7 @@ async def test_execute_cell_injects_workspace_volume():
     tools = await server.list_tools()
     assert len([t for t in tools if t.name == "execute_cell"]) == 1
 
-    await server.call_tool("execute_cell", {"code": "print('hello')"})
+    await server.call_tool("execute_cell", {"code": "print('hello')", "image": "python:3.11-slim"})
     volumes = captured_request["volumes"]
     assert len(volumes) == 1
     assert volumes[0]["host_path"] == "/mnt/data/staging"

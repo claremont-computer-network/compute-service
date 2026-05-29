@@ -70,10 +70,12 @@ def test_repr_hides_api_key():
 
 
 def test_repr_shows_none_when_no_key():
+    _unset("CAAS_DISPATCHER_URL", "CAAS_API_KEY", "CAAS_REMOTE_WORKSPACE")
     from caas_mcp.config import Config
     cfg = Config(dispatcher_url="http://x", api_key=None)
-    # repr uses Python repr of None which is 'None'
-    assert "None" in repr(cfg) or "api_key='None'" not in repr(cfg)
+    r = repr(cfg)
+    assert "api_key=" in r
+    assert "api_key=None" in r or "api_key=None)" in r
 
 
 def test_repr_shows_hidden_key():

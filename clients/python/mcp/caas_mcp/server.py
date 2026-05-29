@@ -113,7 +113,7 @@ def make_server(cfg: Config | None = None) -> FastMCP:
     @server.tool()
     async def execute_cell(
         code: str,
-        image: str | None = None,
+        image: str,
         env: str | None = None,
         ctx: Context | None = None,
     ) -> str:
@@ -124,7 +124,7 @@ def make_server(cfg: Config | None = None) -> FastMCP:
 
         Args:
             code:     Python code to execute.
-            image:    Docker image to use.  Defaults to the dispatcher default.
+            image:    Docker image to use (required — e.g. ``"python:3.11-slim"``).
             env:      Comma-separated ``KEY=VALUE`` pairs, e.g.  ``"FOO=1,BAR=baz"``.
         """
         parsed_env = _parse_env(env)
@@ -141,7 +141,7 @@ def make_server(cfg: Config | None = None) -> FastMCP:
             try:
                 output = client.execute_cell(
                     code=code,
-                    image=image or "",
+                    image=image,
                     env=parsed_env or None,
                     volumes=volumes,
                 )
@@ -183,7 +183,8 @@ def make_server(cfg: Config | None = None) -> FastMCP:
             cmd:    Command string or comma-separated list, e.g.
                     ``"python main.py --epochs 10"``.
             env:    Comma-separated ``KEY=VALUE`` pairs.
-            gpu:    GPU request, e.g. ``"gpu:1"`` — omit entirely to clear GPU requests.
+            gpu:    GPU request, e.g. ``"0,1"`` for GPU devices 0 and 1, or ``"all"``
+                    for all available GPUs.  Omit entirely to run without GPU.
             detach: When *True* (default) returns immediately with job metadata.
                     When *False* blocks until the container exits.
         """
@@ -311,20 +312,47 @@ def _parse_env(raw: str | None) -> dict[str, str] | None:
     return result or None
 
 
-def _parse_gpu(raw: str) -> dict:
-    """Parse ``gpu:2`` → ``{"gpu": 2}``.
+def _parse_gpu(raw: str | None) -> dict | None:
+    """Parse a GPU request string into Dispatcher GpuRequest shape.
 
-    ``raw`` is validated by the MCP tool layer before reaching here so
-    it is never ``None`` or empty.
+    Produces ``{"device_ids": [...], "capabilities": ["gpu"]}`` to match
+    the dispatcher's ``GpuRequest`` model.
+
+    Args:
+        raw:  GPU specification, e.g. ``"0,1"`` or ``"all"``.
+              Accepts legacy ``"gpu:N"`` prefix (strips it).
+
+    Returns:
+        A ``GpuRequest``-compatible dict, or ``None`` if *raw* is empty.
+
+    Examples::
+
+        >>> _parse_gpu("0,1")
+        {'device_ids': ['0', '1'], 'capabilities': ['gpu']}
+        >>> _parse_gpu("all")
+        {'device_ids': 'all', 'capabilities': ['gpu']}
+        >>> _parse_gpu("gpu:2")
+        {'device_ids': ['2'], 'capabilities': ['gpu']}
     """
-    if ":" in raw:
-        _, val = raw.split(":", 1)
-    else:
-        val = raw
-    try:
-        return {"gpu": int(val)}
-    except (ValueError, TypeError):
-        return {"gpu": val}
+    if not raw:
+        return None
+
+    gpu_raw = raw.strip()
+    if not gpu_raw:
+        return None
+
+    # Strip legacy "gpu:N" prefix used in earlier iterations
+    if gpu_raw.lower().startswith("gpu:"):
+        gpu_raw = gpu_raw[4:]
+
+    if gpu_raw.lower() == "all":
+        return {"device_ids": "all", "capabilities": ["gpu"]}
+
+    device_ids = [d.strip() for d in gpu_raw.split(",") if d.strip()]
+    if not device_ids:
+        return None
+
+    return {"device_ids": device_ids, "capabilities": ["gpu"]}
 
 
 if __name__ == "__main__":

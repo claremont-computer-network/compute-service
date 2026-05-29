@@ -573,6 +573,16 @@
     document.getElementById("tpl-new-btn").addEventListener("click", () => openTplForm(null));
     document.getElementById("tpl-cancel-btn").addEventListener("click", closeTplForm);
     document.getElementById("tpl-save-btn").addEventListener("click", saveTplForm);
+    document.getElementById("tpl-delete-btn").addEventListener("click", () => {
+      if (!editingTplId) return;
+      const tpl = templatesCache.find(t => t.id === editingTplId);
+      const label = tpl ? (tpl.name || tpl.id) : editingTplId;
+      if (!window.confirm(`Delete template "${label}"?`)) return;
+      fetch(`${_API_BASE}/api/templates/${editingTplId}`, { method: "DELETE", headers: authHeaders() })
+        .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+        .then(() => { closeTplForm(); refreshTemplates(); })
+        .catch(err => { alert(`Failed to delete template: ${err.message}`); });
+    });
 
     // ── launch form ────────────────────────────────────────────────────────────
     // Parse multi-line string input into key=value pairs.

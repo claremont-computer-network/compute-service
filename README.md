@@ -114,7 +114,7 @@ print(torch.cuda.is_available())
 
 Expose compute-service as discoverable tools via the [Model Context Protocol](https://modelcontextprotocol.io/). Agents can dispatch Python code, run containerised workloads, monitor jobs, and retrieve output.
 
-```python
+```json
 # opencode.json
 {
   "mcp": {

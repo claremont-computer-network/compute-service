@@ -170,7 +170,23 @@
     <span id="status">connecting…</span>
   </header>
 
-  <table id="job-table">
+  <!-- Tab navigation -->
+  <nav id="tabs" style="display:flex;gap:0;margin-bottom:1.5rem;border-bottom:1px solid #21262d;">
+    <button class="tab-btn active" data-tab="monitor" style="
+      background:none;border:none;border-bottom:2px solid #58a6ff;color:#58a6ff;
+      padding:0.5rem 1rem;font-family:inherit;font-size:0.85rem;cursor:pointer;
+    ">Monitor</button>
+    <button class="tab-btn" data-tab="launch" style="
+      background:none;border:none;border-bottom:2px solid transparent;color:#8b949e;
+      padding:0.5rem 1rem;font-family:inherit;font-size:0.85rem;cursor:pointer;
+    ">Launch</button>
+  </nav>
+
+  <!-- Tabs content wrapper -->
+  <div id="tab-content">
+    <!-- Monitor tab (existing) -->
+    <div id="panel-monitor">
+      <table id="job-table">
     <thead>
       <tr>
         <th>Job ID</th>
@@ -189,6 +205,108 @@
       <tr id="empty"><td colspan="10">No jobs yet.</td></tr>
     </tbody>
   </table>
+  </div>
+
+  <!-- Launch tab -->
+  <div id="panel-launch" style="display:none;">
+    <form id="launch-form" style="max-width:640px;">
+      <div style="margin-bottom:1rem;">
+        <label for="job-image" style="display:block;color:#8b949e;font-size:0.8rem;margin-bottom:0.3rem;">Image <span style="color:#f85149;">*</span></label>
+        <input id="job-image" name="image" type="text" required placeholder="python:3.12-slim" style="
+          background:#0d1117;border:1px solid #30363d;color:#e6ed3f;padding:0.4rem 0.6rem;
+          font-family:inherit;font-size:0.85rem;width:100%;border-radius:4px;
+        ">
+      </div>
+
+      <div style="margin-bottom:1rem;">
+        <label for="job-cmd" style="display:block;color:#8b949e;font-size:0.8rem;margin-bottom:0.3rem;">Command</label>
+        <textarea id="job-cmd" name="cmd" rows="2" placeholder='["python", "train.py", "--epochs", "10"]' style="
+          background:#0d1117;border:1px solid #30363d;color:#e6ed3f;padding:0.4rem 0.6rem;
+          font-family:inherit;font-size:0.85rem;width:100%;border-radius:4px;resize:vertical;
+        "></textarea>
+      </div>
+
+      <div style="margin-bottom:1rem;">
+        <label for="job-env" style="display:block;color:#8b949e;font-size:0.8rem;margin-bottom:0.3rem;">Environment</label>
+        <textarea id="job-env" name="env" rows="2" placeholder='EPOCHS=10&#10;LEARNING_RATE=0.001' style="
+          background:#0d1117;border:1px solid #30363d;color:#e6ed3f;padding:0.4rem 0.6rem;
+          font-family:inherit;font-size:0.85rem;width:100%;border-radius:4px;resize:vertical;
+        "></textarea>
+      </div>
+
+      <div style="margin-bottom:1rem;">
+        <label for="job-volumes" style="display:block;color:#8b949e;font-size:0.8rem;margin-bottom:0.3rem;">Volumes</label>
+        <textarea id="job-volumes" name="volumes" rows="2" placeholder='/mnt/data:/data:ro&#10;/mnt/results:/outputs' style="
+          background:#0d1117;border:1px solid #30363d;color:#e6ed3f;padding:0.4rem 0.6rem;
+          font-family:inherit;font-size:0.85rem;width:100%;border-radius:4px;resize:vertical;
+        "></textarea>
+        <small style="color:#8b949e;font-size:0.7rem;">One per line: HOST_PATH:CONTAINER_PATH[:MODE]</small>
+      </div>
+
+      <div style="display:flex;gap:1rem;margin-bottom:1rem;">
+        <div style="flex:1;">
+          <label for="job-gpu" style="display:block;color:#8b949e;font-size:0.8rem;margin-bottom:0.3rem;">GPU</label>
+          <select id="job-gpu" name="gpu" style="
+            background:#0d1117;border:1px solid #30363d;color:#e6ed3f;padding:0.4rem 0.6rem;
+            font-family:inherit;font-size:0.85rem;width:100%;border-radius:4px;
+          ">
+            <option value="">None</option>
+            <option value="all">All</option>
+            <option value="0">0</option>
+            <option value="1">1</option>
+            <option value="2">2</option>
+            <option value="3">3</option>
+          </select>
+        </div>
+        <div style="flex:1;">
+          <label for="job-shm" style="display:block;color:#8b949e;font-size:0.8rem;margin-bottom:0.3rem;">Shared Memory</label>
+          <input id="job-shm" name="shm_size" type="text" placeholder="2g" style="
+            background:#0d1117;border:1px solid #30363d;color:#e6ed3f;padding:0.4rem 0.6rem;
+            font-family:inherit;font-size:0.85rem;width:100%;border-radius:4px;
+          ">
+        </div>
+      </div>
+
+      <div style="display:flex;gap:1rem;margin-bottom:1.5rem;">
+        <div style="flex:1;">
+          <label for="job-ipc" style="display:block;color:#8b949e;font-size:0.8rem;margin-bottom:0.3rem;">IPC Mode</label>
+          <input id="job-ipc" name="ipc_mode" type="text" placeholder="host" style="
+            background:#0d1117;border:1px solid #30363d;color:#e6ed3f;padding:0.4rem 0.6rem;
+            font-family:inherit;font-size:0.85rem;width:100%;border-radius:4px;
+          ">
+        </div>
+        <div style="flex:1;">
+          <label for="job-detach" style="display:block;color:#8b949e;font-size:0.8rem;margin-bottom:0.3rem;">Mode</label>
+          <select id="job-detach" name="detach" style="
+            background:#0d1117;border:1px solid #30363d;color:#e6ed3f;padding:0.4rem 0.6rem;
+            font-family:inherit;font-size:0.85rem;width:100%;border-radius:4px;
+          ">
+            <option value="1">Detached</option>
+            <option value="0">Synchronous</option>
+          </select>
+        </div>
+      </div>
+
+      <button type="submit" id="submit-btn" style="
+        background:#238636;border:none;color:#fff;padding:0.5rem 1.2rem;
+        border-radius:4px;font-family:inherit;font-size:0.85rem;cursor:pointer;
+      ">Submit Job</button>
+    </form>
+
+    <div id="launch-result" style="margin-top:1.5rem;display:none;">
+      <div id="result-header" style="
+        color:#8b949e;font-size:0.8rem;margin-bottom:0.5rem;border-bottom:1px solid #21262d;
+        padding-bottom:0.3rem;
+      "></div>
+      <pre id="result-body" style="
+        background:#010409;border:1px solid #21262d;padding:0.75rem 1rem;border-radius:4px;
+        color:#8b949e;font-size:0.8rem;white-space:pre-wrap;word-break:break-all;
+        max-height:200px;overflow-y:auto;
+      "></pre>
+    </div>
+  </div>
+
+  </div><!-- /tab-content -->
 
   <script>
     // ── config ────────────────────────────────────────────────────────────────
@@ -204,6 +322,107 @@
       const p = window.location.pathname.replace(/\/ui\/?.*$/, "");
       return window.location.origin + p;
     })();
+
+    // ── tabs ──────────────────────────────────────────────────────────────────
+    // Switch between Monitor and Launch panels.
+    document.getElementById("tabs").addEventListener("click", e => {
+      const btn = e.target.closest(".tab-btn");
+      if (!btn) return;
+      document.querySelectorAll(".tab-btn").forEach(b => {
+        b.style.borderBottomColor = b === btn ? "#58a6ff" : "transparent";
+        b.style.color = b === btn ? "#58a6ff" : "#8b949e";
+      });
+      document.getElementById("panel-monitor").style.display = btn.dataset.tab === "monitor" ? "" : "none";
+      document.getElementById("panel-launch").style.display  = btn.dataset.tab === "launch" ? "" : "none";
+    });
+
+    // ── launch form ────────────────────────────────────────────────────────────
+    // Parse multi-line string input into key=value pairs.
+    function parseLines(text) {
+      return text.trim().split("\n").filter(l => l.trim()).map(l => l.trim());
+    }
+
+    function parseEnv(text) {
+      const obj = {};
+      for (const line of parseLines(text)) {
+        const idx = line.indexOf("=");
+        if (idx >= 0) obj[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
+      }
+      return Object.keys(obj).length > 0 ? obj : undefined;
+    }
+
+    function parseVolumes(text) {
+      const result = [];
+      for (const line of parseLines(text)) {
+        const parts = line.split(":");
+        if (parts.length < 2) continue;  // at least host:container
+        const entry = { host_path: parts[0].trim(), container_path: parts[1].trim() };
+        entry.mode = parts[2] ? parts[2].trim() : "rw";
+        result.push(entry);
+      }
+      return result.length > 0 ? result : undefined;
+    }
+
+    function parseGpu(text) {
+      if (!text) return undefined;
+      if (text === "all") return { device_ids: "all", capabilities: ["gpu"] };
+      return { device_ids: text.split(",").map(s => s.trim()), capabilities: ["gpu"] };
+    }
+
+    document.getElementById("launch-form").addEventListener("submit", async e => {
+      e.preventDefault();
+      const btn = document.getElementById("submit-btn");
+      const resultDiv = document.getElementById("launch-result");
+      const resultHeader = document.getElementById("result-header");
+      const resultBody = document.getElementById("result-body");
+
+      btn.disabled = true;
+      btn.textContent = "Submitting…";
+      resultDiv.style.display = "none";
+
+      const payload = {
+        image: document.getElementById("job-image").value.trim(),
+        cmd: document.getElementById("job-cmd").value.trim() || undefined,
+        env: parseEnv(document.getElementById("job-env").value),
+        volumes: parseVolumes(document.getElementById("job-volumes").value),
+        gpu: parseGpu(document.getElementById("job-gpu").value),
+        shm_size: document.getElementById("job-shm").value.trim() || undefined,
+        ipc_mode: document.getElementById("job-ipc").value.trim() || undefined,
+        detach: document.getElementById("job-detach").value === "1",
+      };
+
+      try {
+        const resp = await fetch(`${_API_BASE}/v1/execute`, {
+          method: "POST",
+          headers: { ...authHeaders(), "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({}));
+          throw new Error(err.detail ?? err.message ?? `HTTP ${resp.status}`);
+        }
+
+        const data = await resp.json();
+        resultHeader.textContent = data.status === "running"
+          ? `Job submitted — container ${data.container_id}`
+          : `Job completed (exit ${data.exit_code})`;
+        resultBody.textContent = JSON.stringify(data, null, 2);
+        resultDiv.style.display = "";
+
+        // Switch to monitor tab so user can see the job in the table.
+        document.querySelector('[data-tab="monitor"]').click();
+      } catch (err) {
+        resultHeader.textContent = "Error";
+        resultBody.textContent = err.message;
+        resultBody.style.color = "#f85149";
+        resultDiv.style.display = "";
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "Submit Job";
+        resultBody.style.color = "#8b949e";
+      }
+    });
 
     // ── api key ───────────────────────────────────────────────────────────────
     // Key is stored in sessionStorage so it is never embedded in the HTML source.

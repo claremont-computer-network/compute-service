@@ -235,6 +235,16 @@
       </div>
 
       <div style="margin-bottom:1rem;">
+        <label for="template-select" style="display:block;color:#8b949e;font-size:0.8rem;margin-bottom:0.3rem;">Load Template</label>
+        <select id="template-select" style="
+          background:#0d1117;border:1px solid #30363d;color:#e6ed3f;padding:0.4rem 0.6rem;
+          font-family:inherit;font-size:0.85rem;width:100%;border-radius:4px;
+        ">
+          <option value="">— none —</option>
+        </select>
+      </div>
+
+      <div style="margin-bottom:1rem;">
         <label for="staging-select" style="display:block;color:#8b949e;font-size:0.8rem;margin-bottom:0.3rem;">Load Staging Area</label>
         <select id="staging-select" style="
           background:#0d1117;border:1px solid #30363d;color:#e6ed3f;padding:0.4rem 0.6rem;
@@ -346,8 +356,9 @@
       document.getElementById("panel-launch").style.display  = btn.dataset.tab === "launch" ? "" : "none";
     });
 
-    // ── templates ─────────────────────────────────────────────────────────────
+    // ── templates & staging ───────────────────────────────────────────────────
     let templatesCache = [];
+    let stagingCache = [];
 
     function refreshTemplates() {
       fetch(`${_API_BASE}/api/templates`, { headers: authHeaders() })
@@ -355,23 +366,19 @@
         .then(list => {
           templatesCache = list;
           const sel = document.getElementById("template-select");
+          if (!sel) return;
           const current = sel.value;
           sel.innerHTML = '<option value="">— none —</option>';
-          for (const tpl of list) {
+          for (const t of list) {
             const opt = document.createElement("option");
-            opt.value = tpl.template_id;
-            opt.textContent = tpl.name || tpl.template_id;
+            opt.value = t.id;
+            opt.textContent = t.name || t.id;
             sel.appendChild(opt);
           }
           sel.value = current;
         })
         .catch(() => { templatesCache = []; });
     }
-    refreshTemplates();
-    setInterval(refreshTemplates, 30000);
-
-    // ── staging area ──────────────────────────────────────────────────────────
-    let stagingCache = [];
 
     function refreshStaging() {
       fetch(`${_API_BASE}/api/staging`, { headers: authHeaders() })
@@ -379,20 +386,23 @@
         .then(list => {
           stagingCache = list;
           const sel = document.getElementById("staging-select");
+          if (!sel) return;
           const current = sel.value;
           sel.innerHTML = '<option value="">— none —</option>';
           for (const s of list) {
             const opt = document.createElement("option");
-            opt.value = s.staging_name;
-            opt.textContent = s.name || s.staging_name;
+            opt.value = s.id;
+            opt.textContent = s.name || s.id;
             sel.appendChild(opt);
           }
           sel.value = current;
         })
         .catch(() => { stagingCache = []; });
     }
-    refreshStaging();
-    setInterval(refreshStaging, 30000);
+
+    // Defer initial fetches until after api-key constants below have initialized.
+    queueMicrotask(() => { refreshTemplates(); refreshStaging(); });
+    setInterval(() => { refreshTemplates(); refreshStaging(); }, 30000);
 
     // ── launch form ────────────────────────────────────────────────────────────
     // Parse multi-line string input into key=value pairs.
@@ -449,48 +459,46 @@
         detach: document.getElementById("job-detach").value === "1",
       };
 
-      const templateId = document.getElementById("template-select").value;
-      if (templateId) {
-        const tpl = templatesCache.find(t => t.template_id === templateId);
-        if (tpl) {
-          if (!payload.image && tpl.image) payload.image = tpl.image;
-          if (!payload.cmd && tpl.cmd) payload.cmd = tpl.cmd;
-          if (!payload.env && tpl.environment) {
-            payload.env = {};
-            for (const [k, v] of Object.entries(tpl.environment)) {
-              payload.env[k] = v;
+      const tplSelect = document.getElementById("template-select");
+      if (tplSelect) {
+        const templateId = tplSelect.value;
+        if (templateId) {
+          const tpl = templatesCache.find(t => t.id === templateId);
+          if (tpl) {
+            if (!payload.image && tpl.image) payload.image = tpl.image;
+            if (!payload.cmd && tpl.cmd) payload.cmd = tpl.cmd;
+            if (!payload.env && tpl.env && Object.keys(tpl.env).length > 0) {
+              payload.env = {};
+              for (const [k, v] of Object.entries(tpl.env)) {
+                payload.env[k] = v;
+              }
             }
-          }
-          if (!payload.volumes && tpl.default_volume_mounts) {
-            payload.volumes = tpl.default_volume_mounts.map(m => ({
-              host_path: m.host_path,
-              container_path: m.container_path,
-              mode: m.mode || "rw",
-            }));
+            if (!payload.volumes && tpl.volumes && tpl.volumes.length > 0) {
+              payload.volumes = tpl.volumes.map(m => ({
+                host_path: m.host_path,
+                container_path: m.container_path,
+                mode: m.mode || "rw",
+              }));
+            }
           }
         }
       }
 
-      const stagingName = document.getElementById("staging-select").value;
-      if (stagingName) {
-        const st = stagingCache.find(s => s.staging_name === stagingName);
-        if (st && st.volume_specs) {
-          if (!payload.volumes) {
-            payload.volumes = st.volume_specs.map(m => ({
-              host_path: m.host_path,
-              container_path: m.container_path,
-              mode: m.mode || "rw",
-            }));
-          } else {
-            const existingPaths = new Set(payload.volumes.map(v => v.container_path));
-            for (const v of st.volume_specs) {
-              if (!existingPaths.has(v.container_path)) {
-                payload.volumes.push({
-                  host_path: v.host_path,
-                  container_path: v.container_path,
-                  mode: v.mode || "rw",
-                });
-              }
+      const stgSelect = document.getElementById("staging-select");
+      if (stgSelect) {
+        const stagingId = stgSelect.value;
+        if (stagingId) {
+          const st = stagingCache.find(s => s.id === stagingId);
+          if (st && st.host_path) {
+            const mount = {
+              host_path: st.host_path,
+              container_path: st.dest_path || st.host_path,
+              mode: "rw",
+            };
+            if (!payload.volumes) {
+              payload.volumes = [mount];
+            } else {
+              payload.volumes.push(mount);
             }
           }
         }

@@ -1595,17 +1595,8 @@
     }
 
     function openFile(path) {
-      fetch(`${_API_BASE}/api/files?path=${encodeURIComponent(path)}`, { headers: authHeaders() })
-        .then(r => {
-          if (!r.ok) return r.text().then(t => { throw new Error(`Not a directory or file not found: ${t}`) });
-          return r.json();
-        })
-        .then(data => {
-          alert(`📁 ${data.path}\n\n${(data.entries || []).length} entries`);
-        })
-        .catch(e => {
-          alert(`Error: ${e.message}`);
-        });
+      // /api/files lists directories; requesting a file path can error on the server.
+      alert(`📄 ${path}`);
     }
 
     function getFileIcon(name) {

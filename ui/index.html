@@ -1350,7 +1350,8 @@
         const status = sch.status || "pending";
         const statusColors = { pending: "#d29922", active: "#3fb950", running: "#3fb950", cancelled: "#6e7681", completed: "#8b949e", error: "#f85149" };
         const badgeColor = statusColors[status] || "#58a6ff";
-        const jobId = (sch.jobs && sch.jobs[0]) ? sch.jobs[0].substring(0, 12) : "—";
+        const job = sch.jobs && sch.jobs[0];
+        const jobId = job ? (typeof job === "string" ? job : job.job_id || "—") : "—"
         const delay = sch.delay_seconds != null && (sch.delay_seconds > 0 ? sch.delay_seconds + "s" : sch.delay_seconds === 0 ? "immediate" : "—");
         const trId = esc(sch.id);
         const tplName = sch._template_name ? ` [${esc(sch._template_name)}]` : "";

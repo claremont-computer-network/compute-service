@@ -1561,10 +1561,10 @@
         const icon = entry.is_dir ? "📁" : getFileIcon(entry.name);
         const size = entry.is_dir ? "" : fmtSize(entry.size || 0);
         const modified = entry.mtime ? new Date(entry.mtime * 1000).toLocaleString() : "";
-        const href = entry.is_dir ? `loadFiles("${encPath(basePath, entry.name)}")` : `openFile("${encPath(basePath, entry.name)}")`;
+        const targetPath = encPath(basePath, entry.name);
         const clickAttr = entry.is_dir
-          ? `onclick="loadFiles('${encPath(basePath, entry.name)}')" style="cursor:pointer;"`
-          : `onclick="openFile('${encPath(basePath, entry.name)}')" style="cursor:pointer;"`;
+          ? `onclick="loadFiles(${JSON.stringify(targetPath)})" style="cursor:pointer;"`
+          : `onclick="openFile(${JSON.stringify(targetPath)})" style="cursor:pointer;"`;
         return `<div ${clickAttr} style="display:flex;align-items:center;gap:0.5rem;padding:0.3rem 0.5rem;border-bottom:1px solid #21262d;">
           <span style="flex-shrink:0;">${icon}</span>
           <span style="color:#e6ed3f;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:monospace;font-size:0.85rem;">${name}</span>

@@ -222,7 +222,7 @@
 
       <div style="margin-bottom:1rem;">
         <label for="job-image" style="display:block;color:#8b949e;font-size:0.8rem;margin-bottom:0.3rem;">Image <span style="color:#f85149;">*</span></label>
-        <input id="job-image" name="image" type="text" required placeholder="python:3.12-slim" style="
+        <input id="job-image" name="image" type="text" placeholder="python:3.12-slim" style="
           background:#0d1117;border:1px solid #30363d;color:#e6ed3f;padding:0.4rem 0.6rem;
           font-family:inherit;font-size:0.85rem;width:100%;border-radius:4px;
         ">
@@ -242,6 +242,16 @@
           background:#0d1117;border:1px solid #30363d;color:#e6ed3f;padding:0.4rem 0.6rem;
           font-family:inherit;font-size:0.85rem;width:100%;border-radius:4px;resize:vertical;
         "></textarea>
+      </div>
+
+      <div style="margin-bottom:1rem;">
+        <label for="staging-select" style="display:block;color:#8b949e;font-size:0.8rem;margin-bottom:0.3rem;">Load Staging Area</label>
+        <select id="staging-select" style="
+          background:#0d1117;border:1px solid #30363d;color:#e6ed3f;padding:0.4rem 0.6rem;
+          font-family:inherit;font-size:0.85rem;width:100%;border-radius:4px;
+        ">
+          <option value="">— none —</option>
+        </select>
       </div>
 
       <div style="margin-bottom:1rem;">
@@ -355,20 +365,47 @@
         .then(list => {
           templatesCache = list;
           const sel = document.getElementById("template-select");
+          if (!sel) return;
           const current = sel.value;
           sel.innerHTML = '<option value="">— none —</option>';
-          for (const tpl of list) {
+          for (const t of list) {
             const opt = document.createElement("option");
-            opt.value = tpl.template_id;
-            opt.textContent = tpl.name || tpl.template_id;
+            opt.value = t.id;
+            opt.textContent = t.name || t.id;
             sel.appendChild(opt);
           }
           sel.value = current;
         })
         .catch(() => { templatesCache = []; });
     }
-    refreshTemplates();
+    queueMicrotask(() => { refreshTemplates(); });
     setInterval(refreshTemplates, 30000);
+
+    // ── staging area ──────────────────────────────────────────────────────────
+    let stagingCache = [];
+
+    function refreshStaging() {
+      fetch(`${_API_BASE}/api/staging`, { headers: authHeaders() })
+        .then(r => r.ok ? r.json() : Promise.reject(r.status))
+        .then(list => {
+          stagingCache = list;
+          const sel = document.getElementById("staging-select");
+          if (!sel) return;
+          const current = sel.value;
+          sel.innerHTML = '<option value="">— none —</option>';
+          for (const s of list) {
+            const opt = document.createElement("option");
+            opt.value = s.id;
+            opt.textContent = s.name || s.id;
+            sel.appendChild(opt);
+          }
+          sel.value = current;
+        })
+        .catch(() => { /* keep last successful cache so submit still works */ });
+    }
+
+    queueMicrotask(() => { refreshStaging(); });
+    setInterval(refreshStaging, 30000);
 
     // ── launch form ────────────────────────────────────────────────────────────
     // Parse multi-line string input into key=value pairs.
@@ -427,26 +464,63 @@
         detach: document.getElementById("job-detach").value === "1",
       };
 
-      const templateId = document.getElementById("template-select").value;
-      if (templateId) {
-        const tpl = templatesCache.find(t => t.template_id === templateId);
-        if (tpl) {
-          if (!payload.image && tpl.image) payload.image = tpl.image;
-          if (!payload.cmd && tpl.cmd) payload.cmd = tpl.cmd;
-          if (!payload.env && tpl.environment) {
-            payload.env = {};
-            for (const [k, v] of Object.entries(tpl.environment)) {
-              payload.env[k] = v;
+      const tplSelect = document.getElementById("template-select");
+      if (tplSelect) {
+        const templateId = tplSelect.value;
+        if (templateId) {
+          const tpl = templatesCache.find(t => t.id === templateId);
+          if (tpl) {
+            if (!payload.image && tpl.image) payload.image = tpl.image;
+            if (!payload.cmd && tpl.cmd) payload.cmd = tpl.cmd;
+            if (!payload.env && tpl.env && Object.keys(tpl.env).length > 0) {
+              payload.env = {};
+              for (const [k, v] of Object.entries(tpl.env)) {
+                payload.env[k] = v;
+              }
+            }
+            if (!payload.volumes && tpl.volumes && tpl.volumes.length > 0) {
+              payload.volumes = tpl.volumes.map(m => ({
+                host_path: m.host_path,
+                container_path: m.container_path,
+                mode: m.mode || "rw",
+              }));
             }
           }
-          if (!payload.volumes && tpl.default_volume_mounts) {
-            payload.volumes = tpl.default_volume_mounts.map(m => ({
-              host_path: m.host_path,
-              container_path: m.container_path,
-              mode: m.mode || "rw",
-            }));
+        }
+      }
+
+      const stgSelect = document.getElementById("staging-select");
+      if (stgSelect) {
+        const stagingId = stgSelect.value;
+        if (stagingId) {
+          const st = stagingCache.find(s => s.id === stagingId);
+          if (st && st.host_path) {
+            const mount = {
+              host_path: st.host_path,
+              container_path: st.dest_path || st.host_path,
+              mode: "rw",
+            };
+            if (!payload.volumes) {
+              payload.volumes = [mount];
+            } else {
+              payload.volumes.push(mount);
+            }
           }
         }
+      }
+
+      // Enforce image requirement after template/staging merge so:
+      // - template-only launches work (image set by template merge)
+      // - unselected templates with empty images are rejected
+      if (!payload.image) {
+        resultHeader.textContent = "Validation Error";
+        resultBody.textContent = "Image is required. Either enter it manually or select a template that includes one.";
+        resultBody.style.color = "#f85149";
+        resultDiv.style.display = "";
+        btn.disabled = false;
+        btn.textContent = "Submit Job";
+        return;
+      }
       }
 
       try {

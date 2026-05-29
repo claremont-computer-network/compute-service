@@ -220,7 +220,7 @@
 
       <div style="margin-bottom:1rem;">
         <label for="job-cmd" style="display:block;color:#8b949e;font-size:0.8rem;margin-bottom:0.3rem;">Command</label>
-        <textarea id="job-cmd" name="cmd" rows="2" placeholder='["python", "train.py", "--epochs", "10"]' style="
+        <textarea id="job-cmd" name="cmd" rows="2" placeholder='python train.py --epochs 10' style="
           background:#0d1117;border:1px solid #30363d;color:#e6ed3f;padding:0.4rem 0.6rem;
           font-family:inherit;font-size:0.85rem;width:100%;border-radius:4px;resize:vertical;
         "></textarea>
@@ -420,7 +420,9 @@
       } finally {
         btn.disabled = false;
         btn.textContent = "Submit Job";
-        resultBody.style.color = "#8b949e";
+        if (resultHeader.textContent !== "Error") {
+          resultBody.style.color = "#8b949e";
+        }
       }
     });
 

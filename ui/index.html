@@ -349,22 +349,26 @@
     // ── templates ─────────────────────────────────────────────────────────────
     let templatesCache = [];
 
-    function loadTemplates() {
+    function refreshTemplates() {
       fetch(`${_API_BASE}/api/templates`, { headers: authHeaders() })
         .then(r => r.ok ? r.json() : Promise.reject(r.status))
         .then(list => {
           templatesCache = list;
           const sel = document.getElementById("template-select");
+          const current = sel.value;
+          sel.innerHTML = '<option value="">— none —</option>';
           for (const tpl of list) {
             const opt = document.createElement("option");
             opt.value = tpl.template_id;
             opt.textContent = tpl.name || tpl.template_id;
             sel.appendChild(opt);
           }
+          sel.value = current;
         })
         .catch(() => { templatesCache = []; });
     }
-    loadTemplates();
+    refreshTemplates();
+    setInterval(refreshTemplates, 30000);
 
     // ── launch form ────────────────────────────────────────────────────────────
     // Parse multi-line string input into key=value pairs.
@@ -427,8 +431,8 @@
       if (templateId) {
         const tpl = templatesCache.find(t => t.template_id === templateId);
         if (tpl) {
-          if (tpl.image) payload.image = tpl.image;
-          if (tpl.cmd) payload.cmd = tpl.cmd;
+          if (!payload.image && tpl.image) payload.image = tpl.image;
+          if (!payload.cmd && tpl.cmd) payload.cmd = tpl.cmd;
           if (!payload.env && tpl.environment) {
             payload.env = {};
             for (const [k, v] of Object.entries(tpl.environment)) {

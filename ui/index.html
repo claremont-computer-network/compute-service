@@ -446,7 +446,8 @@
       document.getElementById("panel-monitor").style.display = btn.dataset.tab === "monitor" ? "" : "none";
       document.getElementById("panel-launch").style.display  = btn.dataset.tab === "launch" ? "" : "none";
        document.getElementById("panel-templates").style.display = btn.dataset.tab === "templates" ? "" : "none";
-       document.getElementById("panel-schedules").style.display = btn.dataset.tab === "schedules" ? "" : "none";
+        document.getElementById("panel-schedules").style.display = btn.dataset.tab === "schedules" ? "" : "none";
+        document.getElementById("panel-files").style.display = btn.dataset.tab === "files" ? "" : "none";
        if (btn.dataset.tab === "templates") refreshTemplates();
        if (btn.dataset.tab === "schedules") refreshSchedules();
        if (btn.dataset.tab === "files") loadFiles("/");
@@ -1535,7 +1536,7 @@
       loadingEl.style.display = "block";
       fetch(`${_API_BASE}/api/files?path=${encodeURIComponent(path)}`, { headers: authHeaders() })
         .then(r => {
-          if (!r.ok) return r.text().then(t => { throw new Error(`${_API_BASE}/api/files?path=${path}: ${r.status} ${t}`) });
+          if (!r.ok) return r.text().then(t => { throw new Error(`${_API_BASE}/api/files?path=${path}: ${r.status} ${esc(t)}`) });
           return r.json();
         })
         .then(data => {
@@ -1560,7 +1561,7 @@
         const name = esc(entry.name);
         const icon = entry.is_dir ? "📁" : getFileIcon(entry.name);
         const size = entry.is_dir ? "" : fmtSize(entry.size || 0);
-        const modified = entry.mtime ? new Date(entry.mtime * 1000).toLocaleString() : "";
+        const modified = entry.modified ? new Date(entry.modified).toLocaleString() : "";
         const targetPath = encPath(basePath, entry.name);
         const clickAttr = entry.is_dir
           ? `onclick="loadFiles(${JSON.stringify(targetPath)})" style="cursor:pointer;"`
@@ -1582,13 +1583,14 @@
       const parts = path.split("/").filter(Boolean);
       let current = "/";
       let html = `<span style="cursor:pointer;color:#58a6ff;" onclick="loadFiles('/')">root</span>`;
-      for (const part of parts) {
-        current = current + part + "/";
+      for (let i = 0; i < parts.length; i++) {
+        const part = parts[i];
+        current = current.endsWith("/") ? current + part : current + "/" + part;
         html += ` <span style="color:#8b949e;">/</span> `;
-        if (current === path) {
+        if (i === parts.length - 1) {
           html += `<span style="color:#e6ed3f;">${esc(part)}</span>`;
         } else {
-          html += `<span style="cursor:pointer;color:#58a6ff;" onclick="loadFiles('${encPath("/", parts.slice(0, parts.indexOf(part) + 1).join("/"))}');">${esc(part)}</span>`;
+          html += `<span style="cursor:pointer;color:#58a6ff;" onclick="loadFiles(${JSON.stringify(current)})">${esc(part)}</span>`;
         }
       }
       bc.innerHTML = html;

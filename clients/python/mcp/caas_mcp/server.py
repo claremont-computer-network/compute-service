@@ -180,7 +180,7 @@ def make_server(cfg: Config | None = None) -> FastMCP:
 
         Args:
             image:  Docker image name (e.g. ``"nvcr.io/nvidia/pytorch:24.01-py3"``).
-            cmd:    Command string or comma-separated list, e.g.
+            cmd:    Command string to run in the container, e.g.
                     ``"python main.py --epochs 10"``.
             env:    Comma-separated ``KEY=VALUE`` pairs.
             gpu:    GPU request, e.g. ``"0,1"`` for GPU devices 0 and 1, or ``"all"``

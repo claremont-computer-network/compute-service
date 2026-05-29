@@ -180,10 +180,57 @@
       background:none;border:none;border-bottom:2px solid transparent;color:#8b949e;
       padding:0.5rem 1rem;font-family:inherit;font-size:0.85rem;cursor:pointer;
     ">Launch</button>
+    <button class="tab-btn" data-tab="templates" style="
+      background:none;border:none;border-bottom:2px solid transparent;color:#8b949e;
+      padding:0.5rem 1rem;font-family:inherit;font-size:0.85rem;cursor:pointer;
+    ">Templates</button>
   </nav>
 
-  <!-- Tabs content wrapper -->
+   <!-- Tabs content wrapper -->
   <div id="tab-content">
+    <!-- Templates tab -->
+    <div id="panel-templates" style="display:none;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
+        <h2 style="margin:0;font-size:1rem;color:#e6ed3f;">Templates</h2>
+        <button id="tpl-new-btn" style="background:#238636;color:#fff;border:none;padding:0.4rem 0.8rem;font-family:inherit;font-size:0.85rem;border-radius:4px;cursor:pointer;">
+          + New Template
+        </button>
+      </div>
+      <div id="tpl-list" style="display:flex;flex-direction:column;gap:0.5rem;"></div>
+      <div id="tpl-edit-panel" style="display:none;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
+          <h3 style="margin:0;font-size:1rem;color:#e6ed3f;" id="tpl-edit-title">Edit Template</h3>
+          <div style="display:flex;gap:0.5rem;">
+            <button id="tpl-delete-btn" style="background:#da3633;color:#fff;border:none;padding:0.4rem 0.8rem;font-family:inherit;font-size:0.85rem;border-radius:4px;cursor:pointer;">Delete</button>
+            <button id="tpl-cancel-btn" style="background:#21262d;color:#8b949e;border:1px solid #30363d;padding:0.4rem 0.8rem;font-family:inherit;font-size:0.85rem;border-radius:4px;cursor:pointer;">Cancel</button>
+            <button id="tpl-save-btn" style="background:#238636;color:#fff;border:none;padding:0.4rem 0.8rem;font-family:inherit;font-size:0.85rem;border-radius:4px;cursor:pointer;">Save</button>
+          </div>
+        </div>
+        <form id="tpl-form" style="max-width:500px;display:flex;flex-direction:column;gap:0.8rem;">
+          <div>
+            <label for="tpl-name" style="display:block;color:#8b949e;font-size:0.8rem;margin-bottom:0.2rem;">Name</label>
+            <input id="tpl-name" type="text" style="background:#0d1117;border:1px solid #30363d;color:#e6ed3f;padding:0.4rem 0.6rem;font-family:inherit;font-size:0.85rem;width:100%;border-radius:4px;" placeholder="My Python Template">
+          </div>
+          <div>
+            <label for="tpl-image" style="display:block;color:#8b949e;font-size:0.8rem;margin-bottom:0.2rem;">Image</label>
+            <input id="tpl-image" type="text" style="background:#0d1117;border:1px solid #30363d;color:#e6ed3f;padding:0.4rem 0.6rem;font-family:inherit;font-size:0.85rem;width:100%;border-radius:4px;" placeholder="python:3.12-slim">
+          </div>
+          <div>
+            <label for="tpl-cmd" style="display:block;color:#8b949e;font-size:0.8rem;margin-bottom:0.2rem;">Command</label>
+            <textarea id="tpl-cmd" rows="2" style="background:#0d1117;border:1px solid #30363d;color:#e6ed3f;padding:0.4rem 0.6rem;font-family:inherit;font-size:0.85rem;width:100%;border-radius:4px;resize:vertical;" placeholder="python train.py --epochs 10"></textarea>
+          </div>
+          <div>
+            <label for="tpl-env" style="display:block;color:#8b949e;font-size:0.8rem;margin-bottom:0.2rem;">Environment Variables</label>
+            <textarea id="tpl-env" rows="3" style="background:#0d1117;border:1px solid #30363d;color:#e6ed3f;padding:0.4rem 0.6rem;font-family:inherit;font-size:0.85rem;width:100%;border-radius:4px;resize:vertical;" placeholder="EPOCHS=10&#10;LEARNING_RATE=0.001"></textarea>
+          </div>
+          <div>
+            <label for="tpl-volumes" style="display:block;color:#8b949e;font-size:0.8rem;margin-bottom:0.2rem;">Volumes</label>
+            <textarea id="tpl-volumes" rows="2" style="background:#0d1117;border:1px solid #30363d;color:#e6ed3f;padding:0.4rem 0.6rem;font-family:inherit;font-size:0.85rem;width:100%;border-radius:4px;resize:vertical;" placeholder='/mnt/data:/data:ro&#10;/mnt/models:/models'></textarea>
+          </div>
+        </form>
+      </div>
+    </div>
+
     <!-- Monitor tab (existing) -->
     <div id="panel-monitor">
       <table id="job-table">
@@ -354,6 +401,8 @@
       });
       document.getElementById("panel-monitor").style.display = btn.dataset.tab === "monitor" ? "" : "none";
       document.getElementById("panel-launch").style.display  = btn.dataset.tab === "launch" ? "" : "none";
+      document.getElementById("panel-templates").style.display = btn.dataset.tab === "templates" ? "" : "none";
+      if (btn.dataset.tab === "templates") refreshTemplates();
     });
 
     // ── templates ─────────────────────────────────────────────────────────────
@@ -364,6 +413,7 @@
         .then(r => r.ok ? r.json() : Promise.reject(r.status))
         .then(list => {
           templatesCache = list;
+          renderTemplateList();
           const sel = document.getElementById("template-select");
           if (!sel) return;
           const current = sel.value;
@@ -406,6 +456,119 @@
 
     queueMicrotask(() => { refreshStaging(); });
     setInterval(refreshStaging, 30000);
+
+    // ── template CRUD ─────────────────────────────────────────────────────────
+    let editingTplId = null;
+
+    function renderTemplateList() {
+      const list = document.getElementById("tpl-list");
+      if (!list) return;
+      list.innerHTML = "";
+      for (const t of templatesCache) {
+        const row = document.createElement("div");
+        row.style.cssText = "display:flex;justify-content:space-between;align-items:center;background:#161b22;border:1px solid #30363d;border-radius:4px;padding:0.5rem 0.8rem;";
+        row.innerHTML = `
+          <div>
+            <span style="color:#e6ed3f;font-size:0.85rem;">${esc(t.name || t.id)}</span>
+            <span style="color:#8b949e;font-size:0.75rem;margin-left:0.5rem;">${esc(t.image || "")}</span>
+          </div>
+          <div style="display:flex;gap:0.4rem;">
+            <button class="tpl-edit" data-tpl-id="${esc(t.id)}" style="background:#21262d;border:1px solid #30363d;color:#8b949e;padding:0.25rem 0.6rem;font-family:inherit;font-size:0.75rem;border-radius:4px;cursor:pointer;">Edit</button>
+            <button class="tpl-del" data-tpl-id="${esc(t.id)}" style="background:#21262d;border:1px solid #30363d;color:#f85149;padding:0.25rem 0.6rem;font-family:inherit;font-size:0.75rem;border-radius:4px;cursor:pointer;">Delete</button>
+          </div>
+        `;
+        list.appendChild(row);
+      }
+    }
+
+    function openTplForm(tpl) {
+      editingTplId = tpl ? tpl.id : null;
+      document.getElementById("tpl-name").value = tpl ? (tpl.name || "") : "";
+      document.getElementById("tpl-image").value = tpl ? (tpl.image || "") : "";
+      document.getElementById("tpl-cmd").value = tpl ? (Array.isArray(tpl.cmd) ? tpl.cmd.join(" ") : (tpl.cmd || "")) : "";
+      document.getElementById("tpl-env").value = tpl && tpl.env ? Object.entries(tpl.env).map(([k, v]) => `${k}=${v}`).join("\n") : "";
+      document.getElementById("tpl-volumes").value = tpl && tpl.volumes ? tpl.volumes.map(v => `${v.host_path}:${v.container_path}${v.mode !== "rw" ? ":" + v.mode : ""}`).join("\n") : "";
+      document.getElementById("tpl-edit-title").textContent = tpl ? `Edit: ${tpl.name || tpl.id}` : "New Template";
+      document.getElementById("tpl-delete-btn").style.display = tpl ? "" : "none";
+      document.getElementById("tpl-list").style.display = "none";
+      document.getElementById("tpl-new-btn").style.display = "none";
+      document.getElementById("tpl-edit-panel").style.display = "";
+    }
+
+    function closeTplForm() {
+      editingTplId = null;
+      document.getElementById("tpl-edit-panel").style.display = "none";
+      document.getElementById("tpl-list").style.display = "";
+      document.getElementById("tpl-new-btn").style.display = "";
+    }
+
+    function renderTplListClick() {
+      document.getElementById("tpl-list").addEventListener("click", e => {
+        if (e.target.classList.contains("tpl-edit")) {
+          const tpl = templatesCache.find(t => t.id === e.target.dataset.tplId);
+          if (tpl) openTplForm(tpl);
+        } else if (e.target.classList.contains("tpl-del")) {
+          const tpl = templatesCache.find(t => t.id === e.target.dataset.tplId);
+          if (!tpl) return;
+          if (!window.confirm(`Delete template "${tpl.name || tpl.id}"?`)) return;
+          fetch(`${_API_BASE}/api/templates/${tpl.id}`, { method: "DELETE", headers: authHeaders() })
+            .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+            .then(() => { refreshTemplates(); })
+            .catch(err => { alert(`Failed to delete template: ${err.message}`); });
+        }
+      });
+    }
+
+    function saveTplForm() {
+      const tplForm = document.getElementById("tpl-form");
+      if (!tplForm) return;
+      templateId = editingTplId;
+      const body = {
+        name: tplForm.querySelector("#tpl-name").value.trim(),
+        image: tplForm.querySelector("#tpl-image").value.trim(),
+        cmd: tplForm.querySelector("#tpl-cmd").value.trim(),
+        env: (() => {
+          const lines = tplForm.querySelector("#tpl-env").value.trim().split("\n");
+          const obj = {};
+          for (const line of lines) {
+            const idx = line.indexOf("=");
+            if (idx >= 0) obj[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
+          }
+          return Object.keys(obj).length > 0 ? obj : undefined;
+        })(),
+        volumes: (() => {
+          const lines = tplForm.querySelector("#tpl-volumes").value.trim().split("\n").filter(l => l.trim());
+          const result = [];
+          for (const line of lines) {
+            const parts = line.split(":");
+            if (parts.length > 2) {
+              const container = parts.slice(1, -1).join(":");
+              result.push({ host_path: parts[0].trim(), container_path: container, mode: parts[parts.length - 1].trim() });
+            } else if (parts.length === 2) {
+              result.push({ host_path: parts[0].trim(), container_path: parts[1].trim(), mode: "rw" });
+            }
+          }
+          return result.length > 0 ? result : undefined;
+        })(),
+      };
+      fetch(`${_API_BASE}/api/templates`, {
+        method: "POST",
+        headers: { ...authHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      })
+        .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+        .then(() => {
+          closeTplForm();
+          refreshTemplates();
+        })
+        .catch(err => { alert(`Failed to save template: ${err.message}`); });
+    }
+
+    // Template CRUD event listeners
+    renderTplListClick();
+    document.getElementById("tpl-new-btn").addEventListener("click", () => openTplForm(null));
+    document.getElementById("tpl-cancel-btn").addEventListener("click", closeTplForm);
+    document.getElementById("tpl-save-btn").addEventListener("click", saveTplForm);
 
     // ── launch form ────────────────────────────────────────────────────────────
     // Parse multi-line string input into key=value pairs.

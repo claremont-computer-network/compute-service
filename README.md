@@ -110,6 +110,29 @@ print(torch.cuda.is_available())
 
 ---
 
+## MCP Server — tools for LLM agents
+
+Expose compute-service as discoverable tools via the [Model Context Protocol](https://modelcontextprotocol.io/). Agents can dispatch Python code, run containerised workloads, monitor jobs, and retrieve output.
+
+```python
+# opencode.json
+{
+  "mcp": {
+    "caas": {
+      "type": "local",
+      "command": ["python", "-m", "caas_mcp.server"],
+      "environment": {
+        "CAAS_DISPATCHER_URL": "http://192.168.1.50:8000"
+      }
+    }
+  }
+}
+```
+
+→ [MCP Server setup and tools reference](https://claremont-computer-network.github.io/compute-service/client/mcp-server/)
+
+---
+
 ## Development
 
 ```bash

@@ -58,6 +58,7 @@ nav:
       - CaasClient: client/caas-client.md
       - "%%dispatch Magic": client/dispatch-magic.md
       - Job Registry: client/job-registry.md
+      - MCP Server: client/mcp-server.md
   - Cookbooks:
       - First Cell: cookbooks/first-cell.md
       - Linear Algebra: cookbooks/linear-algebra.md

@@ -517,7 +517,10 @@
         resultBody.textContent = "Image is required. Either enter it manually or select a template that includes one.";
         resultBody.style.color = "#f85149";
         resultDiv.style.display = "";
+        btn.disabled = false;
+        btn.textContent = "Submit Job";
         return;
+      }
       }
 
       try {

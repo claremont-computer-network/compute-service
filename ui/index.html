@@ -1639,7 +1639,7 @@
 
     function encPath(base, name) {
       const sep = base.endsWith("/") ? "" : "/";
-      return encodeURIComponent(base + sep + name);
+      return base + sep + name;
     }
   </script>
 </body>

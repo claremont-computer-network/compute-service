@@ -184,13 +184,53 @@ import numpy as np
 print(np.__version__)
 ```
 
+### `--template`
+
+Use a stored job template instead of specifying `--image` and other fields inline.
+The template id is looked up on the dispatcher and its configuration (image, cmd, env,
+volumes, gpu) is used as the base for the container.
+
+Individual fields from the template can still be overridden using other flags:
+
+```python
+%%dispatch --image python:3.11-slim --template tpl_training
+import torch
+print(torch.cuda.is_available())
+```
+
+When both `--image` and `--template` are provided, the image is used as a fallback only
+if the template does not specify one.
+
+---
+
+### `--staging`
+
+Mount a pre-configured staging area instead of specifying `--volume` flags. Staging areas
+are named references to host path mounts created via the dispatcher's `/api/staging`
+endpoint.
+
+```python
+# Create a staging area first (run once):
+#   client.staging_create(name="outputs", host_path="/mnt/datasets", dest_path="/data")
+
+# Then use it in dispatch:
+%%dispatch --image python:3.12-slim --staging outputs
+import os
+print(os.listdir("/data"))
+```
+
+When a staging area has no explicit `dest_path`, the container mount point defaults to the
+host path value.
+
 ---
 
 ## Flags reference
 
 | Flag | Description |
 |------|-------------|
-| `--image IMAGE` | Docker image to use for this cell |
+| `--template ID` | Use a stored job template |
+| `--staging ID` | Mount a staging area by name |
+| `--image IMAGE` | Docker image to use for this cell (mutually exclusive with `--template`) |
 | `--gpu all\|ID,...` | Request GPU access |
 | `--volume HOST:CONTAINER[:MODE]` | Bind-mount a host path (repeatable) |
 | `--shm-size SIZE` | `/dev/shm` size, e.g. `1g` |

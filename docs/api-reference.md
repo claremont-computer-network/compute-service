@@ -18,6 +18,8 @@ Requests without a valid key return HTTP 401. If `DISPATCHER_API_KEY` is unset o
 
 ## Endpoints
 
+### Core API (`/v1/*`)
+
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/health` | Liveness check |
@@ -27,6 +29,23 @@ Requests without a valid key return HTTP 401. If `DISPATCHER_API_KEY` is unset o
 | `GET` | `/v1/jobs/{job_id}` | Get a single job by ID |
 | `DELETE` | `/v1/jobs/{job_id}` | Stop and remove a job |
 | `GET` | `/v1/logs/{container_id}` | Fetch logs for a detached job |
+
+### Extension API (`/api/*`)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/templates` | List job templates |
+| `POST` | `/api/templates` | Create or update a job template |
+| `DELETE` | `/api/templates/{id}` | Delete a template |
+| `GET` | `/api/files` | Browse files on mounted host directories |
+| `GET` | `/api/schedule` | List all schedules |
+| `POST` | `/api/schedule` | Create a schedule (trigger a job after a delay) |
+| `DELETE` | `/api/schedule/{id}` | Cancel a pending schedule |
+| `GET` | `/api/staging` | List staging areas |
+| `POST` | `/api/staging` | Create a staging area (named mount config) |
+| `DELETE` | `/api/staging/{id}` | Remove a staging area |
+| `GET` | `/api/jobs?state=X` | List jobs filtered by state |
+| `GET` | `/api/deployments/{id}/status` | Check deployment outcome |
 
 ---
 
@@ -56,6 +75,8 @@ Submit a container job. Jobs can run synchronously (blocking until exit) or deta
 | `volumes` | list of [VolumeSpec](#volumespec) | — | Host paths to bind-mount |
 | `detach` | boolean | — | If `false`, block until the container exits and return logs inline. Default: `true`. |
 | `gpu` | [GpuRequest](#gpurequest) | — | GPU access request. Requires `nvidia-container-toolkit` on the host. |
+| `shm_size` | string | — | Shared memory size, e.g. `"2g"`. |
+| `ipc_mode` | string | — | IPC namespace, e.g. `"host"`. |
 
 **Response (detached)**
 
@@ -111,6 +132,9 @@ Run a Python code string inside a container and return its output. Always synchr
 | `env` | object | — | Environment variables |
 | `volumes` | list of [VolumeSpec](#volumespec) | — | Host paths to bind-mount |
 | `gpu` | [GpuRequest](#gpurequest) | — | GPU access request |
+| `shm_size` | string | — | Shared memory size. |
+| `ipc_mode` | string | — | IPC namespace. |
+| `suppress_entrypoint` | boolean | — | Bypass the container ENTRYPOINT. Auto-enabled for `nvcr.io/*` images. |
 
 **Response**
 
@@ -220,6 +244,285 @@ curl "http://192.168.1.50:8000/v1/logs/a3f8d0e12b9c?follow=true" \
 
 ---
 
+## Extension API reference
+
+### `GET /api/templates`
+
+List all job templates. Templates are reusable job configurations stored on the dispatcher.
+
+**Response**
+
+```json
+[
+  {
+    "id": "tpl_abc123",
+    "name": "training",
+    "image": "pytorch/pytorch:2.3.0-cuda12.1-cudnn8-runtime",
+    "cmd": ["python", "train.py"],
+    "env": {"EPOCHS": "10"},
+    "volumes": [{"host_path": "/mnt/data", "container_path": "/data"}],
+    "gpu": {"device_ids": "all"},
+    "created_at": "2025-01-01T00:00:00+00:00",
+    "modified_at": "2025-01-01T00:00:00+00:00"
+  }
+]
+```
+
+---
+
+### `POST /api/templates`
+
+Create or update a job template. If `id` is provided and matches an existing template, it is updated (only the provided fields). Otherwise a new template is created.
+
+**Request body**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | — | Template name. Default: `""`. |
+| `image` | string | — | Docker image. |
+| `cmd` | string \| list | — | Command. |
+| `env` | object | — | Environment variables. |
+| `volumes` | list of [VolumeSpec](#volumespec) | — | Host paths to bind-mount. |
+| `gpu` | [GpuRequest](#gpurequest) | — | GPU request. |
+| `id` | string | — | Template ID to update (omit to create new). |
+
+**Response** — the saved template dict with `id`, `created_at`, `modified_at`.
+
+- Returns HTTP 201 on creation.
+- Returns HTTP 404 on update when the template ID is not found.
+
+---
+
+### `DELETE /api/templates/{template_id}`
+
+Delete a template by ID.
+
+**Response**
+
+```json
+{"deleted": "tpl_abc123"}
+```
+
+Returns HTTP 404 if the template is not found.
+
+---
+
+### `GET /api/files`
+
+List files in a mounted directory. Only directories under `ALLOWED_HOST_DIRS` may be browsed.
+
+**Query parameters**
+
+| Parameter | Description |
+|-----------|-------------|
+| `path` | Host path to list. Default: `/`. |
+
+**Response**
+
+```json
+{
+  "path": "/mnt/datasets",
+  "entries": [
+    {
+      "name": "train.pt",
+      "permissions": "644",
+      "size": 1048576,
+      "modified": "2025-01-01T00:00:00+00:00",
+      "is_dir": false
+    },
+    {
+      "name": "logs/",
+      "permissions": "755",
+      "size": 4096,
+      "modified": "2025-01-01T00:00:00+00:00",
+      "is_dir": true
+    }
+  ]
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `name` | File name |
+| `permissions` | Octal permissions string |
+| `size` | File size in bytes |
+| `modified` | ISO 8601 modification timestamp |
+| `is_dir` | Whether it is a directory |
+
+Returns HTTP 400 if the path is not in `ALLOWED_HOST_DIRS`, 404 if not found, 403 if permission denied.
+
+---
+
+### `GET /api/schedule`
+
+List all schedules.
+
+**Response**
+
+```json
+[
+  {
+    "id": "sch_abc123",
+    "name": "Schedule sch_abc123",
+    "status": "pending",
+    "template_id": "tpl_abc",
+    "delay_seconds": 86400,
+    "created_at": "2025-01-01T00:00:00+00:00",
+    "triggered_at": null,
+    "jobs": []
+  }
+]
+```
+
+| Field | Description |
+|-------|-------------|
+| `id` | Schedule ID |
+| `name` | Human-readable name |
+| `status` | `pending`, `active`, `cancelled`, or `error` |
+| `template_id` | Referenced template ID (if any) |
+| `delay_seconds` | Seconds to wait before triggering |
+| `created_at` | Creation timestamp |
+| `triggered_at` | When the job was triggered (null if deferred) |
+| `jobs` | List of job records triggered by this schedule |
+
+---
+
+### `POST /api/schedule`
+
+Create a schedule to trigger a job, optionally after a delay.
+
+**Request body**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `template_id` | string | — | Referenced template ID. Mutually exclusive with inline fields. |
+| `delay_seconds` | int | — | Seconds to wait before triggering. Set to `0` for immediate execution. Default: `60`. |
+| `image` | string | — | Docker image (inline, without template). |
+| `cmd` | string \| list | — | Command (inline). |
+| `env` | object | — | Environment variables (inline). |
+| `volumes` | list | — | Volumes (inline). |
+| `gpu` | object | — | GPU request (inline). |
+
+**Response** — the new schedule dict with `id`, `created_at`, `status`.
+
+- Returns HTTP 201 on creation.
+- Returns HTTP 404 if the referenced template was not found.
+
+If `delay_seconds` is `0` the job executes immediately. If `delay_seconds` is `> 0` the status changes to `active` when the delay elapses.
+
+---
+
+### `DELETE /api/schedule/{schedule_id}`
+
+Cancel a pending schedule.
+
+**Response**
+
+```json
+{"cancelled": "sch_abc123"}
+```
+
+Returns HTTP 404 if the schedule is not found.
+
+---
+
+### `GET /api/staging`
+
+List all staging areas — named references to host path mounts that can be reused across jobs.
+
+**Response**
+
+```json
+[
+  {
+    "id": "stg_abc123",
+    "name": "outputs",
+    "host_path": "/mnt/datasets",
+    "dest_path": "/data",
+    "created_at": "2025-01-01T00:00:00+00:00",
+    "description": ""
+  }
+]
+```
+
+---
+
+### `POST /api/staging`
+
+Create a staging area — a named reference to a host path mount.
+
+**Request body**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | ✓ | Name for this staging area. |
+| `host_path` | string | ✓ | Absolute path on the host. Must be within `ALLOWED_HOST_DIRS`. |
+| `dest_path` | string | — | Destination path inside container. Defaults to `host_path`. |
+
+**Response** — the new staging area dict with `id`, `created_at`.
+
+Returns HTTP 400 if `host_path` is not allowed.
+
+---
+
+### `DELETE /api/staging/{staging_id}`
+
+Remove a staging area.
+
+**Response**
+
+```json
+{"deleted": "stg_abc123"}
+```
+
+Returns HTTP 404 if the staging area is not found.
+
+---
+
+### `GET /api/jobs?state=X`
+
+List jobs filtered by status. Equivalent to `/v1/jobs` but with an optional `state` query parameter for filtering.
+
+**Query parameters**
+
+| Parameter | Description |
+|-----------|-------------|
+| `state` | `running`, `stopped`, or `*` for all. Default: `*`. |
+
+**Response** — list of job records (same shape as `GET /v1/jobs` elements).
+
+---
+
+### `GET /api/deployments/{job_id}/status`
+
+Check the outcome of a deployment — useful for CI systems that need to verify whether a job succeeded.
+
+**Response**
+
+```json
+{
+  "job_id": "a3f8d0e12b9c",
+  "status": "stopped",
+  "exit_code": 0,
+  "success": true,
+  "message": "Job completed successfully"
+}
+```
+
+Fields:
+
+| Field | Description |
+|-------|-------------|
+| `job_id` | Job ID |
+| `status` | `running`, `stopped`, `exited`, `dead` |
+| `exit_code` | Exit code (integer or null while running) |
+| `success` | Whether the exit code was 0 |
+| `message` | Human-readable status |
+
+Returns HTTP 404 if no job is found for the given ID.
+
+---
+
 ## Schema reference
 
 ### VolumeSpec
@@ -256,9 +559,9 @@ curl "http://192.168.1.50:8000/v1/logs/a3f8d0e12b9c?follow=true" \
 
 | HTTP Status | Meaning |
 |-------------|---------|
-| `400` | Bad request — e.g. volume path not in `ALLOWED_HOST_DIRS` |
+| `400` | Bad request — e.g. volume path not in `ALLOWED_HOST_DIRS`, invalid staging path |
 | `401` | Missing or invalid `X-API-Key` |
-| `404` | Job ID not found |
+| `404` | Resource (job, template, schedule, staging area, path) not found |
 | `409` | Job already stopped |
 | `422` | Validation error — request body fails schema checks |
 | `500` | Dispatcher-side error — Docker daemon unreachable, image pull failed, etc. |

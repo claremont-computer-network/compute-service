@@ -167,7 +167,7 @@ Output appears inline, as if the cell ran locally.
 ## 6. Use the Web UI
 
 A lightweight job monitor is served from the dispatcher itself.  
-Open `http://<host>:8000/ui/` in a browser, enter your API key once, and you'll see all known jobs with live CPU/memory sparklines. The **Launch** tab lets you submit jobs from the browser — select a GPU, mount volumes, pass environment variables, and watch the job appear in the **Monitor** tab.
+Open `http://<host>:8000/ui/` in a browser, enter your API key once, and you'll see all known jobs with live CPU/memory sparklines. The **Launch** tab has a "Load Template" dropdown that pre-populates image, command, environment variables, and default volume mounts from saved templates — all user-provided fields take precedence over template values. Select a GPU, mount volumes, and watch the job appear in the **Monitor** tab.
 
 ---
 

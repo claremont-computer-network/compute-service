@@ -211,6 +211,16 @@
   <div id="panel-launch" style="display:none;">
     <form id="launch-form" style="max-width:640px;">
       <div style="margin-bottom:1rem;">
+        <label for="template-select" style="display:block;color:#8b949e;font-size:0.8rem;margin-bottom:0.3rem;">Load Template</label>
+        <select id="template-select" style="
+          background:#0d1117;border:1px solid #30363d;color:#e6ed3f;padding:0.4rem 0.6rem;
+          font-family:inherit;font-size:0.85rem;width:100%;border-radius:4px;
+        ">
+          <option value="">— none —</option>
+        </select>
+      </div>
+
+      <div style="margin-bottom:1rem;">
         <label for="job-image" style="display:block;color:#8b949e;font-size:0.8rem;margin-bottom:0.3rem;">Image <span style="color:#f85149;">*</span></label>
         <input id="job-image" name="image" type="text" required placeholder="python:3.12-slim" style="
           background:#0d1117;border:1px solid #30363d;color:#e6ed3f;padding:0.4rem 0.6rem;
@@ -336,6 +346,26 @@
       document.getElementById("panel-launch").style.display  = btn.dataset.tab === "launch" ? "" : "none";
     });
 
+    // ── templates ─────────────────────────────────────────────────────────────
+    let templatesCache = [];
+
+    function loadTemplates() {
+      fetch(`${_API_BASE}/api/templates`, { headers: authHeaders() })
+        .then(r => r.ok ? r.json() : Promise.reject(r.status))
+        .then(list => {
+          templatesCache = list;
+          const sel = document.getElementById("template-select");
+          for (const tpl of list) {
+            const opt = document.createElement("option");
+            opt.value = tpl.template_id;
+            opt.textContent = tpl.name || tpl.template_id;
+            sel.appendChild(opt);
+          }
+        })
+        .catch(() => { templatesCache = []; });
+    }
+    loadTemplates();
+
     // ── launch form ────────────────────────────────────────────────────────────
     // Parse multi-line string input into key=value pairs.
     function parseLines(text) {
@@ -380,9 +410,11 @@
       btn.textContent = "Submitting…";
       resultDiv.style.display = "none";
 
-      const payload = {
-        image: document.getElementById("job-image").value.trim(),
-        cmd: document.getElementById("job-cmd").value.trim() || undefined,
+      const image = document.getElementById("job-image").value.trim();
+      const cmd = document.getElementById("job-cmd").value.trim();
+      let payload = {
+        image,
+        cmd: cmd || undefined,
         env: parseEnv(document.getElementById("job-env").value),
         volumes: parseVolumes(document.getElementById("job-volumes").value),
         gpu: parseGpu(document.getElementById("job-gpu").value),
@@ -390,6 +422,28 @@
         ipc_mode: document.getElementById("job-ipc").value.trim() || undefined,
         detach: document.getElementById("job-detach").value === "1",
       };
+
+      const templateId = document.getElementById("template-select").value;
+      if (templateId) {
+        const tpl = templatesCache.find(t => t.template_id === templateId);
+        if (tpl) {
+          if (tpl.image) payload.image = tpl.image;
+          if (tpl.cmd) payload.cmd = tpl.cmd;
+          if (!payload.env && tpl.environment) {
+            payload.env = {};
+            for (const [k, v] of Object.entries(tpl.environment)) {
+              payload.env[k] = v;
+            }
+          }
+          if (!payload.volumes && tpl.default_volume_mounts) {
+            payload.volumes = tpl.default_volume_mounts.map(m => ({
+              host_path: m.host_path,
+              container_path: m.container_path,
+              mode: m.mode || "rw",
+            }));
+          }
+        }
+      }
 
       try {
         const resp = await fetch(`${_API_BASE}/v1/execute`, {

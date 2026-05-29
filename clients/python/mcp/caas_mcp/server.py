@@ -210,7 +210,6 @@ def make_server(cfg: Config | None = None) -> FastMCP:
                     gpu=parsed_gpu,
                     detach=detach,
                 )
-                result.pop("logs", None)
             except CaasTimeoutError as exc:
                 return _to_json({
                     "status": "timeout",

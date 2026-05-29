@@ -410,8 +410,10 @@
         resultBody.textContent = JSON.stringify(data, null, 2);
         resultDiv.style.display = "";
 
-        // Switch to monitor tab so user can see the job in the table.
-        document.querySelector('[data-tab="monitor"]').click();
+        // Switch detached submissions to monitor so the user can see the running job.
+        if (data.status === "running") {
+          document.querySelector('[data-tab="monitor"]').click();
+        }
       } catch (err) {
         resultHeader.textContent = "Error";
         resultBody.textContent = err.message;

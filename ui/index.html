@@ -222,7 +222,7 @@
 
       <div style="margin-bottom:1rem;">
         <label for="job-image" style="display:block;color:#8b949e;font-size:0.8rem;margin-bottom:0.3rem;">Image <span style="color:#f85149;">*</span></label>
-        <input id="job-image" name="image" type="text" required placeholder="python:3.12-slim" style="
+        <input id="job-image" name="image" type="text" placeholder="python:3.12-slim" style="
           background:#0d1117;border:1px solid #30363d;color:#e6ed3f;padding:0.4rem 0.6rem;
           font-family:inherit;font-size:0.85rem;width:100%;border-radius:4px;
         ">
@@ -378,7 +378,7 @@
         })
         .catch(() => { templatesCache = []; });
     }
-    refreshTemplates();
+    queueMicrotask(() => { refreshTemplates(); });
     setInterval(refreshTemplates, 30000);
 
     // ── staging area ──────────────────────────────────────────────────────────

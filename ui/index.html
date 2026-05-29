@@ -509,6 +509,15 @@
         }
       }
 
+      // Enforce image requirement after template/staging merge so:
+      // - template-only launches work (image set by template merge)
+      // - unselected templates with empty images are rejected
+      if (!payload.image) {
+        setLoading(false);
+        showResult("error", "Image is required. Either enter it manually or select a template that includes one.");
+        return;
+      }
+
       try {
         const resp = await fetch(`${_API_BASE}/v1/execute`, {
           method: "POST",

@@ -24,6 +24,11 @@
     Pass `--gpu all` to expose every GPU via the NVIDIA runtime.  
     [:octicons-arrow-right-24: GPU Workloads](cookbooks/gpu-workload.md)
 
+-   :material-monitor: **Browser monitor**
+
+    A no-build single-page UI ships with the dispatcher.  
+    [:octicons-arrow-right-24: Quickstart](quickstart.md)
+
 </div>
 
 ---

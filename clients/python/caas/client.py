@@ -213,9 +213,19 @@ class CaasClient:
 
     # ── job registry ──────────────────────────────────────────────────────────
 
-    def jobs(self) -> list:
-        """Return all known jobs (with live resource stats for running ones)."""
-        resp = self._call("GET", f"{self._base}/v1/jobs", headers=self._headers())
+    def jobs(self, state: t.Optional[str] = None) -> list:
+        """Return all known jobs (with live resource stats for running ones).
+
+        Args:
+            state: Optional filter — "running", "stopped", or "*" for all.
+                   When omitted, falls back to the legacy /v1/jobs endpoint
+                   (no filtering).  Pass a value to use the extension API.
+        """
+        if state is not None:
+            params = {"state": state}
+            resp = self._call("GET", f"{self._base}/api/jobs", params=params, headers=self._headers())
+        else:
+            resp = self._call("GET", f"{self._base}/v1/jobs", headers=self._headers())
         return self._check(resp).json()
 
     def job(self, job_id: str) -> dict:
@@ -226,4 +236,114 @@ class CaasClient:
     def stop(self, job_id: str) -> dict:
         """Stop and remove a running job. Returns {"job_id": ..., "status": "stopped"}."""
         resp = self._call("DELETE", f"{self._base}/v1/jobs/{job_id}", headers=self._headers())
+        return self._check(resp).json()
+
+    def deployment_status(self, job_id: str) -> dict:
+        """Check the outcome of a deployment (job).
+
+        Returns the job status, exit code, and a human-readable success/failure
+        label.  Useful for polling CI systems or the UI.
+        """
+        resp = self._call("GET", f"{self._base}/api/deployments/{job_id}/status", headers=self._headers())
+        return self._check(resp).json()
+
+    # ── templates ───────────────────────────────────────────────────────────────
+
+    def templates_list(self) -> list:
+        """List all job templates."""
+        resp = self._call("GET", f"{self._base}/api/templates", headers=self._headers())
+        return self._check(resp).json()
+
+    def templates_upsert(self, name: t.Optional[str] = None, image: t.Optional[str] = None,
+                         cmd: t.Optional[t.Union[str, t.List[str]]] = None,
+                         env: t.Optional[t.Dict[str, str]] = None,
+                         volumes: t.Optional[list] = None,
+                         gpu: t.Optional[dict] = None,
+                         id: t.Optional[str] = None) -> dict:
+        """Create or update a job template.
+
+        If *id* is provided and matches an existing template, it is updated
+        (only the provided fields are sent to the server).
+        Otherwise a new template is created.
+
+        Returns:
+            The template dict with ``id``, ``created_at``, and ``modified_at``.
+        """
+        payload = self._compact(
+            id=id, name=name, image=image, cmd=cmd, env=env,
+            volumes=volumes, gpu=gpu,
+        )
+        resp = self._call("POST", f"{self._base}/api/templates",
+                          json=payload, headers=self._headers())
+        return self._check(resp).json()
+
+    def templates_delete(self, template_id: str) -> dict:
+        """Delete a template by ID."""
+        resp = self._call("DELETE", f"{self._base}/api/templates/{template_id}", headers=self._headers())
+        return self._check(resp).json()
+
+    # ── files ───────────────────────────────────────────────────────────────────
+
+    def files_list(self, path: str = "/") -> dict:
+        """List files in a mounted directory.
+
+        Returns ``{"path": "/real/path", "entries": [...]}`` where each entry
+        is ``{"name", "permissions", "size", "modified", "is_dir"}``.
+        """
+        params = {"path": path}
+        resp = self._call("GET", f"{self._base}/api/files", params=params, headers=self._headers())
+        return self._check(resp).json()
+
+    # ── schedules ───────────────────────────────────────────────────────────────
+
+    def schedules_list(self) -> list:
+        """List all schedules."""
+        resp = self._call("GET", f"{self._base}/api/schedule", headers=self._headers())
+        return self._check(resp).json()
+
+    def schedules_upsert(self, template_id: t.Optional[str] = None,
+                         delay_seconds: int = 60,
+                         image: t.Optional[str] = None,
+                         cmd: t.Optional[t.Union[str, t.List[str]]] = None,
+                         env: t.Optional[t.Dict[str, str]] = None,
+                         volumes: t.Optional[list] = None,
+                         gpu: t.Optional[dict] = None) -> dict:
+        """Create a schedule to trigger a job (optionally after a delay).
+
+        If ``delay_seconds == 0`` the job executes immediately.
+
+        Provide either ``template_id`` (references a stored template) or
+        inline fields (image, cmd, env, volumes, gpu).
+        """
+        payload = self._compact(
+            template_id=template_id, delay_seconds=delay_seconds,
+            image=image, cmd=cmd, env=env, volumes=volumes, gpu=gpu,
+        )
+        resp = self._call("POST", f"{self._base}/api/schedule",
+                          json=payload, headers=self._headers())
+        return self._check(resp).json()
+
+    def schedule_cancel(self, schedule_id: str) -> dict:
+        """Cancel a pending schedule."""
+        resp = self._call("DELETE", f"{self._base}/api/schedule/{schedule_id}", headers=self._headers())
+        return self._check(resp).json()
+
+    # ── staging ─────────────────────────────────────────────────────────────────
+
+    def staging_list(self) -> list:
+        """List all staging areas."""
+        resp = self._call("GET", f"{self._base}/api/staging", headers=self._headers())
+        return self._check(resp).json()
+
+    def staging_create(self, name: str, host_path: str,
+                       dest_path: t.Optional[str] = None) -> dict:
+        """Create a staging area — a named reference to a host path mount."""
+        payload = self._compact(name=name, host_path=host_path, dest_path=dest_path)
+        resp = self._call("POST", f"{self._base}/api/staging",
+                          json=payload, headers=self._headers())
+        return self._check(resp).json()
+
+    def staging_delete(self, staging_id: str) -> dict:
+        """Remove a staging area."""
+        resp = self._call("DELETE", f"{self._base}/api/staging/{staging_id}", headers=self._headers())
         return self._check(resp).json()

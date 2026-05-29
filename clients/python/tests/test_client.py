@@ -513,3 +513,211 @@ def test_job_raises_on_404(client, mock_transport):
     )
     with pytest.raises(CaasError, match="not found"):
         client.job("gone")
+
+
+# ---------------------------------------------------------------------------
+# Extension API — deployment status
+# ---------------------------------------------------------------------------
+
+def test_deployment_status_returns_result(client, mock_transport):
+    """deployment_status(job_id) returns the success/failure dict."""
+    mock_transport[("GET", f"{BASE_URL}/api/deployments/abc123/status")] = _make_response(
+        200, {"job_id": "abc123", "status": "stopped", "exit_code": 0, "success": True, "message": "Job completed successfully"}
+    )
+    result = client.deployment_status("abc123")
+    assert result["success"] is True
+    assert result["exit_code"] == 0
+
+
+def test_deployment_status_raises_on_404(client, mock_transport):
+    """deployment_status raises CaasError when job is not found."""
+    from caas.client import CaasError
+    mock_transport[("GET", f"{BASE_URL}/api/deployments/gone/status")] = _make_response(
+        404, {"detail": "No job found for gone"}
+    )
+    with pytest.raises(CaasError, match="No job found"):
+        client.deployment_status("gone")
+
+
+# ---------------------------------------------------------------------------
+# Extension API — templates
+# ---------------------------------------------------------------------------
+
+def test_templates_list_returns_list(client, mock_transport):
+    """templates_list() returns all stored templates."""
+    mock_transport[("GET", f"{BASE_URL}/api/templates")] = _make_response(
+        200, [{"id": "tpl_abc", "name": "train", "image": "pytorch:latest"}]
+    )
+    result = client.templates_list()
+    assert isinstance(result, list)
+    assert result[0]["name"] == "train"
+
+
+def test_templates_upsert_creates(client, mock_transport):
+    """templates_upsert creates a new template when no id is passed."""
+    _assert_payload(
+        mock_transport, "POST", f"{BASE_URL}/api/templates",
+        {"name": "train", "image": "pytorch:latest", "cmd": ["python", "train.py"]},
+        response_body={"id": "tpl_abc123", "name": "train", "created_at": "2025-01-01T00:00:00+00:00", "modified_at": "2025-01-01T00:00:00+00:00", "image": "pytorch:latest", "cmd": ["python", "train.py"]},
+    )
+    result = client.templates_upsert(name="train", image="pytorch:latest", cmd=["python", "train.py"])
+    assert "id" in result
+    assert result["created_at"] is not None
+
+
+def test_templates_upsert_updates(client, mock_transport):
+    """templates_upsert updates an existing template when id is passed."""
+    _assert_payload(
+        mock_transport, "POST", f"{BASE_URL}/api/templates",
+        {"id": "tpl_abc", "name": "updated"},
+        response_body={"id": "tpl_abc", "name": "updated", "created_at": "2025-01-01T00:00:00+00:00", "modified_at": "2025-01-02T00:00:00+00:00"},
+    )
+    result = client.templates_upsert(id="tpl_abc", name="updated")
+    assert result["id"] == "tpl_abc"
+
+
+def test_templates_delete(client, mock_transport):
+    """templates_delete returns {"deleted": id}."""
+    mock_transport[("DELETE", f"{BASE_URL}/api/templates/tpl_abc")] = _make_response(
+        200, {"deleted": "tpl_abc"}
+    )
+    result = client.templates_delete("tpl_abc")
+    assert result["deleted"] == "tpl_abc"
+
+
+# ---------------------------------------------------------------------------
+# Extension API — files
+# ---------------------------------------------------------------------------
+
+def test_files_list_returns_entries(client, mock_transport):
+    """files_list(path) returns {"path": ..., "entries": [...]}."""
+    import json
+    
+    def _check_path(request):
+        query = str(request.url).split("?")[1]
+        from httpx import QueryParams
+        parsed = QueryParams(query)
+        assert parsed.get("path") == "/data"
+        return _make_response(200, {
+            "path": "/data",
+            "entries": [
+                {"name": "model.pt", "permissions": "644", "size": 1024, "modified": "2025-01-01", "is_dir": False},
+                {"name": "logs/", "permissions": "755", "size": 4096, "modified": "2025-01-01", "is_dir": True},
+            ],
+        })
+    
+    mock_transport[("GET", f"{BASE_URL}/api/files")] = _check_path
+    result = client.files_list(path="/data")
+    assert result["path"] == "/data"
+    assert len(result["entries"]) == 2
+
+
+# ---------------------------------------------------------------------------
+# Extension API — schedules
+# ---------------------------------------------------------------------------
+
+def test_schedules_list_returns_list(client, mock_transport):
+    """schedules_list() returns all stored schedules."""
+    mock_transport[("GET", f"{BASE_URL}/api/schedule")] = _make_response(
+        200, [
+            {"id": "sch_abc", "name": "nightly", "status": "pending", "delay_seconds": 86400}
+        ]
+    )
+    result = client.schedules_list()
+    assert isinstance(result, list)
+    assert result[0]["status"] == "pending"
+
+
+def test_schedules_upsert_creates(client, mock_transport):
+    """schedules_upsert creates a new schedule with inline fields."""
+    _assert_payload(
+        mock_transport, "POST", f"{BASE_URL}/api/schedule",
+        {"image": "python:3.12", "cmd": ["python", "train.py"], "delay_seconds": 0},
+        response_body={"id": "sch_abc", "name": "Schedule sch_abc", "status": "active", "delay_seconds": 0},
+    )
+    result = client.schedules_upsert(image="python:3.12", cmd=["python", "train.py"], delay_seconds=0)
+    assert result["status"] == "active"
+
+
+def test_schedules_upsert_with_template(client, mock_transport):
+    """schedules_upsert references a template."""
+    _assert_payload(
+        mock_transport, "POST", f"{BASE_URL}/api/schedule",
+        {"template_id": "tpl_abc", "delay_seconds": 3600},
+        response_body={"id": "sch_abc", "name": "Schedule sch_abc", "status": "pending"},
+    )
+    result = client.schedules_upsert(template_id="tpl_abc", delay_seconds=3600)
+    assert result["status"] == "pending"
+
+
+def test_schedule_cancel(client, mock_transport):
+    """schedule_cancel returns {"cancelled": id}."""
+    mock_transport[("DELETE", f"{BASE_URL}/api/schedule/sch_abc")] = _make_response(
+        200, {"cancelled": "sch_abc"}
+    )
+    result = client.schedule_cancel("sch_abc")
+    assert result["cancelled"] == "sch_abc"
+
+
+# ---------------------------------------------------------------------------
+# Extension API — staging
+# ---------------------------------------------------------------------------
+
+def test_staging_list_returns_list(client, mock_transport):
+    """staging_list() returns all staging areas."""
+    mock_transport[("GET", f"{BASE_URL}/api/staging")] = _make_response(
+        200, [
+            {"id": "stg_abc", "name": "outputs", "host_path": "/mnt/data", "dest_path": "/data"}
+        ]
+    )
+    result = client.staging_list()
+    assert isinstance(result, list)
+    assert result[0]["name"] == "outputs"
+
+
+def test_staging_create(client, mock_transport):
+    """staging_create returns the new staging area dict."""
+    _assert_payload(
+        mock_transport, "POST", f"{BASE_URL}/api/staging",
+        {"name": "outputs", "host_path": "/mnt/datasets", "dest_path": "/data"},
+        response_body={"id": "stg_abc", "name": "outputs", "host_path": "/mnt/datasets", "dest_path": "/data"},
+    )
+    result = client.staging_create(name="outputs", host_path="/mnt/datasets", dest_path="/data")
+    assert result["host_path"] == "/mnt/datasets"
+
+
+def test_staging_delete(client, mock_transport):
+    """staging_delete returns {"deleted": id}."""
+    mock_transport[("DELETE", f"{BASE_URL}/api/staging/stg_abc")] = _make_response(
+        200, {"deleted": "stg_abc"}
+    )
+    result = client.staging_delete("stg_abc")
+    assert result["deleted"] == "stg_abc"
+
+
+# ---------------------------------------------------------------------------
+# Extension API — jobs with state filter (uses /api/jobs)
+# ---------------------------------------------------------------------------
+
+def test_jobs_with_state_filter_uses_api_endpoint(client, mock_transport):
+    """passing state= triggers the extension /api/jobs endpoint instead of /v1/jobs."""
+    import json
+    
+    def _check_query(request):
+        query = str(request.url).split("?")[1]
+        assert "state=running" in query
+        return _make_response(200, [{"job_id": "running001", "status": "running"}])
+    
+    mock_transport[("GET", f"{BASE_URL}/api/jobs")] = _check_query
+    result = client.jobs(state="running")
+    assert isinstance(result, list)
+    assert result[0]["status"] == "running"
+
+
+def test_jobs_without_state_uses_v1_endpoint(client, mock_transport):
+    """passing no state defaults to the legacy /v1/jobs endpoint."""
+    mock_transport[("GET", f"{BASE_URL}/v1/jobs")] = _make_response(
+        200, [{"job_id": "abc", "status": "running"}]
+    )
+    result = client.jobs()
+    assert result[0]["job_id"] == "abc"

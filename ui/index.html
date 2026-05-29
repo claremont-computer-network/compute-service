@@ -235,6 +235,16 @@
       </div>
 
       <div style="margin-bottom:1rem;">
+        <label for="staging-select" style="display:block;color:#8b949e;font-size:0.8rem;margin-bottom:0.3rem;">Load Staging Area</label>
+        <select id="staging-select" style="
+          background:#0d1117;border:1px solid #30363d;color:#e6ed3f;padding:0.4rem 0.6rem;
+          font-family:inherit;font-size:0.85rem;width:100%;border-radius:4px;
+        ">
+          <option value="">— none —</option>
+        </select>
+      </div>
+
+      <div style="margin-bottom:1rem;">
         <label for="job-volumes" style="display:block;color:#8b949e;font-size:0.8rem;margin-bottom:0.3rem;">Volumes</label>
         <textarea id="job-volumes" name="volumes" rows="2" placeholder='/mnt/data:/data:ro&#10;/mnt/results:/outputs' style="
           background:#0d1117;border:1px solid #30363d;color:#e6ed3f;padding:0.4rem 0.6rem;
@@ -336,6 +346,54 @@
       document.getElementById("panel-launch").style.display  = btn.dataset.tab === "launch" ? "" : "none";
     });
 
+    // ── templates ─────────────────────────────────────────────────────────────
+    let templatesCache = [];
+
+    function refreshTemplates() {
+      fetch(`${_API_BASE}/api/templates`, { headers: authHeaders() })
+        .then(r => r.ok ? r.json() : Promise.reject(r.status))
+        .then(list => {
+          templatesCache = list;
+          const sel = document.getElementById("template-select");
+          const current = sel.value;
+          sel.innerHTML = '<option value="">— none —</option>';
+          for (const tpl of list) {
+            const opt = document.createElement("option");
+            opt.value = tpl.template_id;
+            opt.textContent = tpl.name || tpl.template_id;
+            sel.appendChild(opt);
+          }
+          sel.value = current;
+        })
+        .catch(() => { templatesCache = []; });
+    }
+    refreshTemplates();
+    setInterval(refreshTemplates, 30000);
+
+    // ── staging area ──────────────────────────────────────────────────────────
+    let stagingCache = [];
+
+    function refreshStaging() {
+      fetch(`${_API_BASE}/api/staging`, { headers: authHeaders() })
+        .then(r => r.ok ? r.json() : Promise.reject(r.status))
+        .then(list => {
+          stagingCache = list;
+          const sel = document.getElementById("staging-select");
+          const current = sel.value;
+          sel.innerHTML = '<option value="">— none —</option>';
+          for (const s of list) {
+            const opt = document.createElement("option");
+            opt.value = s.staging_name;
+            opt.textContent = s.name || s.staging_name;
+            sel.appendChild(opt);
+          }
+          sel.value = current;
+        })
+        .catch(() => { stagingCache = []; });
+    }
+    refreshStaging();
+    setInterval(refreshStaging, 30000);
+
     // ── launch form ────────────────────────────────────────────────────────────
     // Parse multi-line string input into key=value pairs.
     function parseLines(text) {
@@ -390,6 +448,53 @@
         ipc_mode: document.getElementById("job-ipc").value.trim() || undefined,
         detach: document.getElementById("job-detach").value === "1",
       };
+
+      const templateId = document.getElementById("template-select").value;
+      if (templateId) {
+        const tpl = templatesCache.find(t => t.template_id === templateId);
+        if (tpl) {
+          if (!payload.image && tpl.image) payload.image = tpl.image;
+          if (!payload.cmd && tpl.cmd) payload.cmd = tpl.cmd;
+          if (!payload.env && tpl.environment) {
+            payload.env = {};
+            for (const [k, v] of Object.entries(tpl.environment)) {
+              payload.env[k] = v;
+            }
+          }
+          if (!payload.volumes && tpl.default_volume_mounts) {
+            payload.volumes = tpl.default_volume_mounts.map(m => ({
+              host_path: m.host_path,
+              container_path: m.container_path,
+              mode: m.mode || "rw",
+            }));
+          }
+        }
+      }
+
+      const stagingName = document.getElementById("staging-select").value;
+      if (stagingName) {
+        const st = stagingCache.find(s => s.staging_name === stagingName);
+        if (st && st.volume_specs) {
+          if (!payload.volumes) {
+            payload.volumes = st.volume_specs.map(m => ({
+              host_path: m.host_path,
+              container_path: m.container_path,
+              mode: m.mode || "rw",
+            }));
+          } else {
+            const existingPaths = new Set(payload.volumes.map(v => v.container_path));
+            for (const v of st.volume_specs) {
+              if (!existingPaths.has(v.container_path)) {
+                payload.volumes.push({
+                  host_path: v.host_path,
+                  container_path: v.container_path,
+                  mode: v.mode || "rw",
+                });
+              }
+            }
+          }
+        }
+      }
 
       try {
         const resp = await fetch(`${_API_BASE}/v1/execute`, {

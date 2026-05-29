@@ -401,7 +401,7 @@
           }
           sel.value = current;
         })
-        .catch(() => { stagingCache = []; });
+        .catch(() => { /* keep last successful cache so submit still works */ });
     }
 
     queueMicrotask(() => { refreshStaging(); });
@@ -513,8 +513,10 @@
       // - template-only launches work (image set by template merge)
       // - unselected templates with empty images are rejected
       if (!payload.image) {
-        setLoading(false);
-        showResult("error", "Image is required. Either enter it manually or select a template that includes one.");
+        resultHeader.textContent = "Validation Error";
+        resultBody.textContent = "Image is required. Either enter it manually or select a template that includes one.";
+        resultBody.style.color = "#f85149";
+        resultDiv.style.display = "";
         return;
       }
 

@@ -184,7 +184,8 @@
       background:none;border:none;border-bottom:2px solid transparent;color:#8b949e;
       padding:0.5rem 1rem;font-family:inherit;font-size:0.85rem;cursor:pointer;
     ">Templates</button>
-    <button class="tab-btn" data-tab="schedules" style="background:none;border:none;border-bottom:2px solid transparent;color:#8b949e;padding:0.5rem 1rem;font-family:inherit;font-size:0.85rem;cursor:pointer;">Schedules</button>
+    <button class="tab-btn" data-tab="schedules" style="background:none;border:none;border-bottom:2px solid transparent;color:#8b949e;padding:0.5rem 1rem;font-family:inherit;font-size:0.85rem;cursor:pointer;    ">Schedules</button>
+    <button class="tab-btn" data-tab="files" style="background:none;border:none;border-bottom:2px solid transparent;color:#8b949e;padding:0.5rem 1rem;font-family:inherit;font-size:0.85rem;cursor:pointer;">Files</button>
   </nav>
 
    <!-- Tabs content wrapper -->
@@ -401,6 +402,21 @@
     </div>
   </div>
 
+  <!-- Files tab -->
+  <div id="panel-files" style="display:none;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
+      <h2 style="margin:0;font-size:1rem;color:#e6ed3f;">File Browser</h2>
+    </div>
+    <div style="display:flex;gap:0.5rem;align-items:center;margin-bottom:1rem;">
+      <span style="color:#8b949e;font-size:0.85rem;">/</span>
+      <div id="files-breadcrumb" style="display:flex;gap:0.3rem;flex-wrap:wrap;"></div>
+      <span style="color:#8b949e;font-size:0.85rem;">&larr; Current path</span>
+    </div>
+    <div id="files-path-display" style="color:#e6ed3f;font-family:monospace;font-size:0.85rem;padding:0.5rem;background:#161b22;border-radius:4px;margin-bottom:1rem;word-break:break-all;"></div>
+    <div id="files-list" style="display:flex;flex-direction:column;gap:0.25rem;"></div>
+    <div id="files-loading" style="color:#8b949e;padding:1rem;text-align:center;">Loading...</div>
+  </div>
+
   </div><!-- /tab-content -->
 
   <script>
@@ -433,6 +449,7 @@
        document.getElementById("panel-schedules").style.display = btn.dataset.tab === "schedules" ? "" : "none";
        if (btn.dataset.tab === "templates") refreshTemplates();
        if (btn.dataset.tab === "schedules") refreshSchedules();
+       if (btn.dataset.tab === "files") loadFiles("/");
      });
 
     // ── templates ─────────────────────────────────────────────────────────────
@@ -1506,6 +1523,124 @@
     document.getElementById("sch-new-btn").addEventListener("click", () => openSchForm());
     document.getElementById("sch-cancel-btn").addEventListener("click", () => closeSchForm());
     document.getElementById("sch-save-btn").addEventListener("click", () => saveSchForm());
+
+    // ── file browser ──────────────────────────────────────────────────────────
+    let filesCurrentPath = "/";
+
+    function loadFiles(path) {
+      filesCurrentPath = path;
+      const listEl = document.getElementById("files-list");
+      listEl.innerHTML = "";
+      const loadingEl = document.getElementById("files-loading");
+      loadingEl.style.display = "block";
+      fetch(`${_API_BASE}/api/files?path=${encodeURIComponent(path)}`, { headers: authHeaders() })
+        .then(r => {
+          if (!r.ok) return r.text().then(t => { throw new Error(`${_API_BASE}/api/files?path=${path}: ${r.status} ${t}`) });
+          return r.json();
+        })
+        .then(data => {
+          loadingEl.style.display = "none";
+          document.getElementById("files-path-display").textContent = data.path;
+          renderFiles(data.entries || [], path);
+          renderBreadcrumb(path);
+        })
+        .catch(e => {
+          loadingEl.style.display = "none";
+          listEl.innerHTML = `<div style="color:#f85149;padding:1rem;">Error loading ${path}: ${esc(e.message)}</div>`;
+        });
+    }
+
+    function renderFiles(entries, basePath) {
+      const listEl = document.getElementById("files-list");
+      const sorted = [...entries].sort((a, b) => {
+        if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1;
+        return a.name.localeCompare(b.name);
+      });
+      listEl.innerHTML = sorted.map(entry => {
+        const name = esc(entry.name);
+        const icon = entry.is_dir ? "📁" : getFileIcon(entry.name);
+        const size = entry.is_dir ? "" : fmtSize(entry.size || 0);
+        const modified = entry.mtime ? new Date(entry.mtime * 1000).toLocaleString() : "";
+        const href = entry.is_dir ? `loadFiles("${encPath(basePath, entry.name)}")` : `openFile("${encPath(basePath, entry.name)}")`;
+        const clickAttr = entry.is_dir
+          ? `onclick="loadFiles('${encPath(basePath, entry.name)}')" style="cursor:pointer;"`
+          : `onclick="openFile('${encPath(basePath, entry.name)}')" style="cursor:pointer;"`;
+        return `<div ${clickAttr} style="display:flex;align-items:center;gap:0.5rem;padding:0.3rem 0.5rem;border-bottom:1px solid #21262d;">
+          <span style="flex-shrink:0;">${icon}</span>
+          <span style="color:#e6ed3f;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:monospace;font-size:0.85rem;">${name}</span>
+          <span style="color:#8b949e;font-size:0.8rem;flex-shrink:0;min-width:60px;text-align:right;">${size}</span>
+          <span style="color:#8b949e;font-size:0.8rem;flex-shrink:0;min-width:140px;">${modified}</span>
+        </div>`;
+      }).join("");
+      if (sorted.length === 0) {
+        listEl.innerHTML = '<div style="color:#8b949e;padding:1rem;text-align:center;">Directory is empty.</div>';
+      }
+    }
+
+    function renderBreadcrumb(path) {
+      const bc = document.getElementById("files-breadcrumb");
+      const parts = path.split("/").filter(Boolean);
+      let current = "/";
+      let html = `<span style="cursor:pointer;color:#58a6ff;" onclick="loadFiles('/')">root</span>`;
+      for (const part of parts) {
+        current = current + part + "/";
+        html += ` <span style="color:#8b949e;">/</span> `;
+        if (current === path) {
+          html += `<span style="color:#e6ed3f;">${esc(part)}</span>`;
+        } else {
+          html += `<span style="cursor:pointer;color:#58a6ff;" onclick="loadFiles('${encPath("/", parts.slice(0, parts.indexOf(part) + 1).join("/"))}');">${esc(part)}</span>`;
+        }
+      }
+      bc.innerHTML = html;
+    }
+
+    function openFile(path) {
+      fetch(`${_API_BASE}/api/files?path=${encodeURIComponent(path)}`, { headers: authHeaders() })
+        .then(r => {
+          if (!r.ok) return r.text().then(t => { throw new Error(`Not a directory or file not found: ${t}`) });
+          return r.json();
+        })
+        .then(data => {
+          alert(`📁 ${data.path}\n\n${(data.entries || []).length} entries`);
+        })
+        .catch(e => {
+          alert(`Error: ${e.message}`);
+        });
+    }
+
+    function getFileIcon(name) {
+      if (!name) return "📄";
+      const ext = name.split(".").pop().toLowerCase();
+      const icons = {
+        py: "🐍", txt: "📄", md: "📝", json: "📋", yaml: "📋", yml: "📋",
+        sh: "⚙️", bash: "⚙️", zsh: "⚙️", cfg: "⚙️", conf: "⚙️", ini: "⚙️",
+        env: "⚙️", log: "📃", csv: "📊", xlsx: "📊", xls: "📊",
+        ipynb: "📘", R: "📕", rst: "📖", tex: "📝",
+        py: "🐍", python: "🐍",
+        jpeg: "🖼️", jpg: "🖼️", png: "🖼️", gif: "🖼️", svg: "🖼️", webp: "🖼️",
+        mp4: "🎬", avi: "🎬", mkv: "🎬", mov: "🎬",
+        mp3: "🎵", wav: "🎵", flac: "🎵",
+        zip: "📦", tar: "📦", gz: "📦", bz2: "📦", tgz: "📦",
+        rb: "💎", cs: "💠", go: "🔵", rs: "🦀", js: "🟨", ts: "🔷", jsx: "🟨", tsx: "🔷",
+        html: "🌐", css: "🎨", scss: "🎨", less: "🎨",
+        c: "🔧", cpp: "🔧", cc: "🔧", h: "🔧", hpp: "🔧",
+        java: "☕", class: "☕", kt: "🔷", swift: "🍎",
+        dll: "🔷", so: "🔷", a: "🔷", o: "🔷",
+      };
+      return icons[ext] || "📄";
+    }
+
+    function fmtSize(bytes) {
+      if (bytes === 0) return "0 B";
+      const units = ["B", "KB", "MB", "GB", "TB"];
+      const i = Math.floor(Math.log(bytes) / Math.log(1024));
+      return (bytes / Math.pow(1024, i)).toFixed(i > 0 ? 1 : 0) + " " + units[i];
+    }
+
+    function encPath(base, name) {
+      const sep = base.endsWith("/") ? "" : "/";
+      return encodeURIComponent(base + sep + name);
+    }
   </script>
 </body>
 </html>

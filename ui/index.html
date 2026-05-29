@@ -522,11 +522,15 @@
     function saveTplForm() {
       const tplForm = document.getElementById("tpl-form");
       if (!tplForm) return;
-      templateId = editingTplId;
       const body = {
+        ...(editingTplId ? { id: editingTplId } : {}),
         name: tplForm.querySelector("#tpl-name").value.trim(),
         image: tplForm.querySelector("#tpl-image").value.trim(),
-        cmd: tplForm.querySelector("#tpl-cmd").value.trim(),
+        cmd: (() => {
+          const v = tplForm.querySelector("#tpl-cmd").value.trim();
+          if (!v) return undefined;
+          return v.split(/\s+/).filter(Boolean);
+        })(),
         env: (() => {
           const lines = tplForm.querySelector("#tpl-env").value.trim().split("\n");
           const obj = {};

@@ -1546,7 +1546,7 @@
         })
         .catch(e => {
           loadingEl.style.display = "none";
-          listEl.innerHTML = `<div style="color:#f85149;padding:1rem;">Error loading ${path}: ${esc(e.message)}</div>`;
+          listEl.innerHTML = `<div style="color:#f85149;padding:1rem;">Error loading ${esc(path)}: ${esc(e.message)}</div>`;
         });
     }
 

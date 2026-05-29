@@ -1325,13 +1325,12 @@
     let schFormOpen = false;
 
     function refreshSchedules() {
-      apiKeys
-        .flatMap(k => [API_V1(k), API_V2(k)])
-        .map(u => u + "schedule")
-        .reduce((p, u) => p.then(() => fetch(u).then(r => {
-          if (!r.ok) return r.text().then(t => { throw new Error(`${u}: ${r.status} ${t}`) });
+      fetch(`${_API_BASE}/api/schedule`, { headers: authHeaders() })
+        .then(r => {
+          if (!r.ok) return r.text().then(t => { throw new Error(`${_API_BASE}/api/schedule: ${r.status} ${t}`) });
           return r.json();
-        })).then(res => {
+        })
+        .then(res => {
           schedulesCache = res;
           renderScheduleList();
           if (!schFormOpen) {
@@ -1339,8 +1338,8 @@
             document.getElementById("sch-edit-panel").style.display = "none";
             document.getElementById("sch-new-btn").style.display = "";
           }
-        }).catch(e => console.error("refreshSchedules", e)), Promise.resolve())
-        .catch(e => console.error("refreshSchedules error:", e));
+        })
+        .catch(e => console.error("refreshSchedules", e));
     }
 
     function renderScheduleList() {
@@ -1348,62 +1347,75 @@
       const listEl = document.getElementById("sch-list");
       listEl.innerHTML = schedulesCache.map(sch => {
         count++;
-        const status = sch.status || "queued";
-        const statusColors = { queued: "#d29922", running: "#3fb950", submitted: "#58a6ff", completed: "#8b949e", failed: "#f85149", cancelled: "#6e7681" };
+        const status = sch.status || "pending";
+        const statusColors = { pending: "#d29922", active: "#3fb950", running: "#3fb950", cancelled: "#6e7681", completed: "#8b949e", error: "#f85149" };
         const badgeColor = statusColors[status] || "#58a6ff";
-        const jobId = sch.job_id || "—";
-        const delay = sch.delay_hours ? sch.delay_hours * 3600 + "s (hours)" : (sch.min_run_start ? "—" : (sch["delay-seconds"] || sch.delay_seconds || sch.delay || "none"));
-        const trId = encodeURIComponent(sch.id);
+        const jobId = (sch.jobs && sch.jobs[0]) ? sch.jobs[0].substring(0, 12) : "—";
+        const delay = sch.delay_seconds != null && (sch.delay_seconds > 0 ? sch.delay_seconds + "s" : sch.delay_seconds === 0 ? "immediate" : "—");
+        const trId = esc(sch.id);
+        const tplName = sch._template_name ? ` [${esc(sch._template_name)}]` : "";
+        const name = esc(sch.name || `Schedule ${trId}`);
         return `<div id="sch-${trId}" style="display:flex;align-items:center;gap:0.5rem;padding:0.5rem 0;border-bottom:1px solid #21262d;">
-          <code style="color:#8b949e;flex-shrink:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:80px;">${trId}</code>
+          <code style="color:#8b949e;flex-shrink:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:80px;">${name}${tplName}</code>
           <span style="background:${badgeColor};color:#fff;font-size:0.75rem;padding:2px 6px;border-radius:4px;flex-shrink:0;">${status}</span>
           <span style="color:#8b949e;font-size:0.8rem;flex-shrink:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">delay: ${delay}</span>
-          <span style="color:#8b949e;font-size:0.8rem;flex-shrink:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">job: ${jobId}</span>
+          <span style="color:#8b949e;font-size:0.8rem;flex-shrink:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">job: ${esc(jobId)}</span>
           <button onclick="cancelSch('${trId}')" style="background:#da3633;color:#fff;border:none;padding:0.3rem 0.6rem;font-size:0.8rem;border-radius:4px;cursor:pointer;margin-left:auto;flex-shrink:0;">Cancel</button>
         </div>`;
       }).join("");
       if (count === 0) listEl.innerHTML = '<div style="color:#8b949e;padding:1rem;text-align:center;">No schedules found. Create one with + Schedule Job.</div>';
     }
 
-    function populateSchTemplates() {
+    const _popSchTplsDone = (() => {
       const schSel = document.getElementById("sch-template");
-      if (!schSel || templatesCache.length === 0) return;
-      const current = schSel.value;
-      schSel.innerHTML = '<option value="">— use form fields —</option>';
-      templatesCache.forEach(t => {
-        const opt = document.createElement("option");
-        opt.value = t.id;
-        opt.textContent = t.name || t.id;
-        schSel.appendChild(opt);
-      });
-      schSel.value = current || "";
-      schSel.addEventListener("change", () => {
-        const tpl = templatesCache.find(t => t.id === schSel.value);
-        if (tpl) {
-          document.getElementById("sch-delay").value = tpl.delay || 60;
-          document.getElementById("sch-image").value = tpl.image || "";
-          document.getElementById("sch-cmd").value = Array.isArray(tpl.cmd) ? tpl.cmd.join(" ") : tpl.cmd || "";
-          if (Array.isArray(tpl.env)) {
-            document.getElementById("sch-env").value = tpl.env.map(kv => kv.trim()).filter(Boolean).join("\n");
-          } else if (typeof tpl.env === "string") {
-            document.getElementById("sch-env").value = tpl.env.trim();
+      if (!schSel) return () => {};
+      return () => {
+        if (templatesCache.length === 0) return;
+        const current = schSel.value;
+        schSel.innerHTML = '<option value="">— use form fields —</option>';
+        templatesCache.forEach(t => {
+          const opt = document.createElement("option");
+          opt.value = t.id;
+          opt.textContent = t.name || t.id;
+          schSel.appendChild(opt);
+        });
+        schSel.value = current || "";
+        schSel.removeEventListener("change", schSel._schTplHandler);
+        schSel._schTplHandler = function () {
+          const tpl = templatesCache.find(t => t.id === schSel.value);
+          if (tpl) {
+            document.getElementById("sch-delay").value = "0";
+            document.getElementById("sch-image").value = tpl.image || "";
+            document.getElementById("sch-cmd").value = Array.isArray(tpl.cmd) ? tpl.cmd.join(" ") : tpl.cmd || "";
+            if (Array.isArray(tpl.env)) {
+              document.getElementById("sch-env").value = tpl.env.map((kv, i) => {
+                if (typeof kv === "object" && kv !== null) return `${Object.entries(kv).map(([k, v]) => `${k}=${v}`).join("\n")}`;
+                return kv;
+              }).join("\n");
+            } else if (typeof tpl.env === "object" && tpl.env !== null) {
+              document.getElementById("sch-env").value = Object.entries(tpl.env).map(([k, v]) => `${k}=${v}`).join("\n");
+            }
+            if (Array.isArray(tpl.volumes)) {
+              document.getElementById("sch-volumes").value = tpl.volumes.map(v => {
+                if (typeof v === "object" && v) return v.host_path + ":" + v.container_path + (v.mode && v.mode !== "rw" ? ":" + v.mode : "");
+                return v;
+              }).filter(Boolean).join("\n");
+            } else if (typeof tpl.volumes === "string") {
+              document.getElementById("sch-volumes").value = tpl.volumes.trim();
+            }
+            document.getElementById("sch-gpu").value = tpl.gpu || "";
+          } else {
+            document.getElementById("sch-delay").value = "60";
+            document.getElementById("sch-image").value = "";
+            document.getElementById("sch-cmd").value = "";
+            document.getElementById("sch-env").value = "";
+            document.getElementById("sch-volumes").value = "";
+            document.getElementById("sch-gpu").value = "";
           }
-          if (Array.isArray(tpl.volumes)) {
-            document.getElementById("sch-volumes").value = tpl.volumes.map(v => (typeof v === "object" ? v.host_path + ":" + v.container_path + (v.read_only ? ":ro" : "") : v)).filter(Boolean).join("\n");
-          } else if (typeof tpl.volumes === "string") {
-            document.getElementById("sch-volumes").value = tpl.volumes.trim();
-          }
-          document.getElementById("sch-gpu").value = tpl.gpu || "";
-        } else {
-          document.getElementById("sch-delay").value = "60";
-          document.getElementById("sch-image").value = "";
-          document.getElementById("sch-cmd").value = "";
-          document.getElementById("sch-env").value = "";
-          document.getElementById("sch-volumes").value = "";
-          document.getElementById("sch-gpu").value = "";
-        }
-      });
-    }
+        };
+        schSel.dispatchEvent(new Event("change"));
+      };
+    })();
 
     function openSchForm() {
       schFormOpen = true;
@@ -1415,7 +1427,8 @@
       document.getElementById("sch-save-btn").textContent = "Save Schedule";
       document.getElementById("sch-form").reset();
       document.getElementById("sch-delay").value = "60";
-      populateSchTemplates();
+      document.getElementById("sch-template").value = "";
+      _popSchTplsDone();
     }
 
     function closeSchForm() {
@@ -1429,66 +1442,63 @@
     }
 
     function saveSchForm() {
-      const delay = parseInt(document.getElementById("sch-delay").value, 10) || 60;
+      const delayVal = parseInt(document.getElementById("sch-delay").value, 10);
+      const delay = isNaN(delayVal) ? 60 : delayVal;
       let body = { delay_seconds: delay };
       const tplId = document.getElementById("sch-template").value;
       if (tplId) {
-        const tpl = templatesCache.find(t => t.id === tplId);
-        if (tpl) {
-          body.image = tpl.image;
-          body.cmd = Array.isArray(tpl.cmd) ? tpl.cmd.join(" ").trim() : (tpl.cmd || "");
-          if (Array.isArray(tpl.env)) {
-            body.env = tpl.env.map(kv => kv.trim()).filter(Boolean);
-          } else if (typeof tpl.env === "string") {
-            body.env = tpl.env.trim().split(/\r?\n/).map(kv => kv.trim()).filter(Boolean);
-          }
-          body.gpu = tpl.gpu || "";
-        }
+        body.template_id = tplId;
       }
       const imgVal = document.getElementById("sch-image").value.trim();
-      if (imgVal) body.image = !tplId ? imgVal : (body.image || imgVal);
       const cmdVal = document.getElementById("sch-cmd").value.trim();
-      if (cmdVal) body.cmd = !tplId ? cmdVal : (body.cmd || cmdVal);
-      const envVal = document.getElementById("sch-env").value.trim();
-      if (envVal) {
-        body.env = !tplId ? body.env || [] : (body.env || []);
-        body.env = body.env.concat(envVal.split(/\r?\n/).map(kv => kv.trim()).filter(Boolean));
+      if (!tplId || !body.template_id) {
+        if (imgVal) body.image = imgVal;
+        body.cmd = cmdVal ? cmdVal.split(/\s+/).filter(Boolean) : undefined;
+        const envObj = parseEnv(document.getElementById("sch-env").value);
+        if (envObj) body.env = envObj;
+        const vols = parseVolumes(document.getElementById("sch-volumes").value);
+        if (vols) body.volumes = vols;
+        const gpu = parseGpu(document.getElementById("sch-gpu").value);
+        if (gpu) body.gpu = gpu;
+      } else {
+        if (imgVal) body.image = imgVal;
+        body.cmd = cmdVal ? cmdVal.split(/\s+/).filter(Boolean) : undefined;
+        const envVal = document.getElementById("sch-env").value.trim();
+        if (envVal) {
+          const existing = body.env || {};
+          const extra = parseEnv(envVal);
+          body.env = { ...existing, ...extra };
+        }
+        const volVal = document.getElementById("sch-volumes").value.trim();
+        if (volVal) {
+          const existingVol = body.volumes || [];
+          const extraVol = parseVolumes(volVal);
+          if (extraVol) body.volumes = [...existingVol, ...extraVol];
+        }
+        const gpuVal = document.getElementById("sch-gpu").value.trim();
+        if (gpuVal) body.gpu = parseGpu(gpuVal);
       }
-      const volVal = document.getElementById("sch-volumes").value.trim();
-      if (volVal) {
-        body.volumes = volVal.split(/\r?\n/).map(l => l.trim()).filter(Boolean).map(line => {
-          const parts = line.split(":");
-          if (parts.length >= 2) {
-            const readOnly = line.includes(":ro");
-            return { host_path: parts[0].trim(), container_path: parts[1].trim(), read_only: readOnly };
-          }
-          return line;
-        });
-      }
-      const gpuVal = document.getElementById("sch-gpu").value.trim();
-      if (gpuVal) body.gpu = gpuVal;
-      function trySubmit(urls) {
-        return urls.length ? fetch(urls[0], {
-          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
-        }).then(r => { if (!r.ok) return r.text().then(t => { throw new Error(`${urls[0]}: ${r.status} ${t}`) }); return r.json(); })
-          .then(data => { closeSchForm(); })
-          .catch(e => { console.error("schedule POST error:", e); alert("Schedule failed: " + e.message + "\n\nCheck console for details."); });
-        : Promise.reject(new Error("No API URLs available"));
-      }
-      apiKeys.flatMap(k => [API_V1(k), API_V2(k)]).reduce((p, url) => p.catch(() => trySubmit([url])), Promise.reject())
-        .catch(e => console.error("saveSchForm error:", e));
+      fetch(`${_API_BASE}/api/schedule`, {
+        method: "POST",
+        headers: { ...authHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      })
+        .then(r => {
+          if (!r.ok) return r.text().then(t => { throw new Error(`${_API_BASE}/api/schedule: ${r.status} ${t}`) });
+          return r.json();
+        })
+        .then(() => { closeSchForm(); })
+        .catch(e => { console.error("schedule POST error:", e); alert("Schedule failed: " + e.message + "\n\nCheck console for details."); });
     }
 
     function cancelSch(id) {
       if (!confirm("Are you sure you want to cancel this schedule?")) return;
-      function tryDelete(urls) {
-        return urls.length ? fetch(urls[0], { method: "DELETE" }).then(r => {
-          if (!r.ok) return r.text().then(t => { throw new Error(`${urls[0]}: ${r.status} ${t}`) });
+      fetch(`${_API_BASE}/api/schedule/${id}`, { method: "DELETE", headers: authHeaders() })
+        .then(r => {
+          if (!r.ok) return r.text().then(t => { throw new Error(`${_API_BASE}/api/schedule/${id}: ${r.status} ${t}`) });
           refreshSchedules();
-        }).catch(e => console.error("schedule CANCEL error:", e)) : Promise.reject(new Error("No API URLs available"));
-      }
-      apiKeys.flatMap(k => [API_V1(k), API_V2(k)]).reduce((p, url) => p.catch(() => tryDelete([url])), Promise.reject())
-        .catch(e => console.error("cancelSch error:", e));
+        })
+        .catch(e => console.error("schedule CANCEL error:", e));
     }
 
     // Event listeners for scheduling

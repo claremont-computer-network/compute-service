@@ -1,6 +1,6 @@
 """
 dispatcher/app/api_extensions.py
-────────────────────────────────
+─────────────────────────────────
 Extension API endpoints for the compute-service dispatcher:
 
   /api/templates       - CRUD for job templates
@@ -9,6 +9,7 @@ Extension API endpoints for the compute-service dispatcher:
   /api/schedule/{id}   - Cancel a pending schedule
   /api/staging         - CRUD for staging areas (named mount configs)
   /api/jobs            - Filtered job list (state query param)
+  /api/gpu             - GPU hardware telemetry (nvidia-smi)
   /api/deployments/{id}/status - Check deployment success status
 
 These routes are mounted as a sub-router under the ``app`` instance in
@@ -500,6 +501,18 @@ def staging_delete(
     if ds.delete("staging", staging_id):
         return JSONResponse({"deleted": staging_id})
     return JSONResponse(status_code=404, content={"detail": "Staging area not found"})
+
+
+# ── GPU hardware telemetry ───────────────────────────────────────────────────
+
+@router.get("/api/gpu")
+def gpu_info():
+    """Return GPU hardware info from nvidia-smi."""
+    from app.jobs import _parse_gpu_stats
+    gpus = _parse_gpu_stats()
+    if gpus is None:
+        return JSONResponse([])
+    return JSONResponse([g.model_dump() for g in gpus])
 
 
 # ── Filtered job list ────────────────────────────────────────────────────────

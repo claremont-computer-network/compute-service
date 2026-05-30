@@ -247,6 +247,11 @@ class CaasClient:
         resp = self._call("GET", f"{self._base}/api/deployments/{job_id}/status", headers=self._headers())
         return self._check(resp).json()
 
+    def gpu_info(self) -> list:
+        """Return GPU hardware info (index, memory, temperature, utilization) from nvidia-smi."""
+        resp = self._call("GET", f"{self._base}/api/gpu", headers=self._headers())
+        return self._check(resp).json()
+
     # ── templates ───────────────────────────────────────────────────────────────
 
     def templates_list(self) -> list:

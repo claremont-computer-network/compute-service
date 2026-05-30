@@ -199,6 +199,10 @@ async def lifespan(app: FastAPI):
         for sc in sandbox_containers:
             record = job_store.get(sc.id)
             if record is not None:
+                record.job_type = "sandbox"
+                record.resource_type = _determine_resource_type(sc)
+                record.container_id = sc.id
+                job_store._jobs[sc.id] = record  # pylint: disable=protected-access
                 sandbox_hydrate_container(sc, record)
                 logger.info("Restored sandbox %s (%s slot)", record.job_id[:12], record.resource_type)
             else:
@@ -321,9 +325,9 @@ def _release_sandbox_slots(job) -> None:
     Uses ``job.resource_type`` (recorded at creation) so the call is
     deterministic even if the Docker container has been obliterated.
     """
-    if job.job_id not in sandbox_last_access:
+    last_access = sandbox_last_access.pop(job.job_id, None)
+    if last_access is None:
         return
-    sandbox_last_access.pop(job.job_id, None)
     resource_slots.release(job.resource_type)
 
 # ── Persistent data store ────────────────────────────────────────────────────
@@ -786,7 +790,8 @@ def exec_in_sandbox(job_id: str, req: ExecRequest, authorized: bool = Depends(ge
     except NotFound:
         job_store.mark_stopped(job_id)
         _release_sandbox_slots(job)
-        registry.on_job_complete(job, None)
+        stopped_record = job_store.get(job_id)
+        registry.on_job_complete(stopped_record or job, None)
         raise HTTPException(status_code=404, detail=f"Sandbox container not found: {job_id}")
 
     try:
@@ -837,26 +842,26 @@ async def _reap_sandbox(idle_seconds: int, check_interval: int = 60) -> None:
             if job is None:
                 sandbox_last_access.pop(sid, None)
                 continue
-    container_stopped = False
-    try:
-        try:
-            container = client.containers.get(sid)
-            container.stop()
-            container.remove()
-            container_stopped = True
-        except NotFound:
-            # Container already gone — nothing to stop/remove.
-            pass
-    except DockerException as e:
-        logger.warning("Sandbox reaper: Docker error stopping sandbox %s: %s", sid[:12], e)
+            container_stopped = False
+            try:
+                try:
+                    container = client.containers.get(sid)
+                    container.stop()
+                    container.remove()
+                    container_stopped = True
+                except NotFound:
+                    # Container already gone — nothing to stop/remove.
+                    pass
+            except DockerException as e:
+                logger.warning("Sandbox reaper: Docker error stopping sandbox %s: %s", sid[:12], e)
 
-    # Always release slot and mark stopped, even when container operations fail.
-    # The container is no longer running from the system's perspective — we must
-    # still clean up the dispatcher's accounting so the slot becomes available.
-    _release_sandbox_slots(job)
-    job_store.mark_stopped(sid)
-    registry.on_job_complete(job_store.get(sid) or job, None)
-    logger.info("Reaped idle sandbox %s (idle > %ds)", sid[:12], idle_seconds)
+            # Always release slot and mark stopped, even when container operations fail.
+            # The container is no longer running from the system's perspective — we must
+            # still clean up the dispatcher's accounting so the slot becomes available.
+            _release_sandbox_slots(job)
+            job_store.mark_stopped(sid)
+            registry.on_job_complete(job_store.get(sid) or job, None)
+            logger.info("Reaped idle sandbox %s (idle > %ds)", sid[:12], idle_seconds)
 
 
 # ── Job registry ──────────────────────────────────────────────────────────────

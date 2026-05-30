@@ -721,3 +721,82 @@ def test_jobs_without_state_uses_v1_endpoint(client, mock_transport):
     )
     result = client.jobs()
     assert result[0]["job_id"] == "abc"
+
+
+# ---------------------------------------------------------------------------
+# Sandbox
+# ---------------------------------------------------------------------------
+
+def test_sandbox_create_minimal(client, mock_transport):
+    """sandbox_create() POSTs image and returns sandbox_id."""
+    mock_transport[("POST", f"{BASE_URL}/v1/sandbox")] = _make_response(
+        200, {"sandbox_id": "abc123", "status": "running"}
+    )
+    result = client.sandbox_create(image="python:3.11-slim")
+    assert result["sandbox_id"] == "abc123"
+    assert result["status"] == "running"
+
+
+def test_sandbox_create_includes_env_and_gpu(client, mock_transport):
+    """sandbox_create() forwards env and gpu in the JSON body."""
+    _assert_payload(
+        mock_transport, "POST", f"{BASE_URL}/v1/sandbox",
+        {
+            "image": "pytorch/pytorch:latest",
+            "env": {"EPOCHS": "10", "RANK": "0"},
+            "gpu": {"device_ids": "all", "capabilities": ["gpu"]},
+            "shm_size": "4g",
+        },
+        response_body={"sandbox_id": "sbox001", "status": "running"},
+    )
+    client.sandbox_create(
+        image="pytorch/pytorch:latest",
+        env={"EPOCHS": "10", "RANK": "0"},
+        gpu={"device_ids": "all", "capabilities": ["gpu"]},
+        shm_size="4g",
+    )
+
+
+def test_sandbox_create_omits_none_fields(client, mock_transport):
+    """sandbox_create() does not include env/gpu/shm_size when they are None."""
+    import json
+
+    def _check(request):
+        body = json.loads(request.content)
+        assert "env" not in body
+        assert "gpu" not in body
+        assert "shm_size" not in body
+        return _make_response(200, {"sandbox_id": "sbox002", "status": "running"})
+
+    mock_transport[("POST", f"{BASE_URL}/v1/sandbox")] = _check
+    client.sandbox_create(image="alpine:3.18")
+
+
+def test_sandbox_create_raises_on_error(client, mock_transport):
+    """sandbox_create() raises CaasError on non-2xx responses."""
+    from caas.client import CaasError
+    mock_transport[("POST", f"{BASE_URL}/v1/sandbox")] = _make_response(
+        500, {"detail": "Docker daemon unreachable"}
+    )
+    with pytest.raises(CaasError, match="daemon unreachable"):
+        client.sandbox_create(image="python:3.11-slim")
+
+
+def test_sandbox_exec(client, mock_transport):
+    """sandbox_exec() POSTs cmd and returns stdout/stderr/exit_code."""
+    mock_transport[("POST", f"{BASE_URL}/v1/jobs/sbox001/exec")] = _make_response(
+        200, {"stdout": "hello\n", "stderr": "", "exit_code": 0}
+    )
+    result = client.sandbox_exec("sbox001", "echo hello")
+    assert result["stdout"] == "hello\n"
+    assert result["exit_code"] == 0
+
+
+def test_sandbox_exec_raises_on_404(client, mock_transport):
+    """sandbox_exec() raises CaasError when container is gone."""
+    from caas.client import CaasError
+    mock_transport[("POST", f"{BASE_URL}/v1/jobs/gone/exec")] = _make_response(
+        404, {"detail": "Container not found"}
+    )
+    with pytest.raises(CaasError, match="not found"):
+        client.sandbox_exec("gone", "echo hello")

@@ -535,6 +535,158 @@ def make_server(cfg: Config | None = None) -> FastMCP:
         finally:
             client.close()
 
+    # ── Tools: job management (existing endpoints, missing MCP tools) ─────
+
+    @server.tool()
+    async def browse_files(
+        path: str = "/",
+        ctx: Context | None = None,
+    ) -> str:
+        """List files in a mounted directory.
+
+        Returns ``{"path": "/real/path", "entries": [...]}`` where each entry
+        is ``{"name", "permissions", "size", "modified", "is_dir"}``.
+
+        Only directories under enabled host directories may be browsed.
+
+        Args:
+            path: Host path to list (e.g. ``"/workspace/code"``).
+        """
+        client = _build_client(cfg)
+        try:
+            result = client.files_list(path=path)
+            return _to_json(result)
+        except CaasError as exc:
+            return _to_json({"error": str(exc)})
+        finally:
+            client.close()
+
+    @server.tool()
+    async def get_job_by_id(
+        job_id: str,
+        ctx: Context | None = None,
+    ) -> str:
+        """Return a single job record by job_id (the full container ID).
+
+        Args:
+            job_id: The full 64-char Docker container ID.
+        """
+        client = _build_client(cfg)
+        try:
+            result = client.job(job_id)
+            return _to_json(result)
+        except CaasError as exc:
+            return _to_json({"error": str(exc)})
+        finally:
+            client.close()
+
+    @server.tool()
+    async def delete_template(
+        template_id: str,
+        ctx: Context | None = None,
+    ) -> str:
+        """Delete a template by ID.
+
+        Args:
+            template_id: The template ID returned by ``upsert_template``.
+        """
+        client = _build_client(cfg)
+        try:
+            result = client.templates_delete(template_id)
+            return _to_json(result)
+        except CaasError as exc:
+            return _to_json({"error": str(exc)})
+        finally:
+            client.close()
+
+    @server.tool()
+    async def check_image(
+        image: str,
+        ctx: Context | None = None,
+    ) -> str:
+        """Check if a specific Docker image is available on the node.
+
+        Returns ``{"found": true, "image": {...}}`` or ``{"found": false}``.
+
+        Args:
+            image: Docker image reference (e.g. ``"python:3.11-slim"``).
+        """
+        client = _build_client(cfg)
+        try:
+            result = client.images_check(image)
+            return _to_json(result)
+        except CaasError as exc:
+            return _to_json({"error": str(exc)})
+        finally:
+            client.close()
+
+    # ── Tools: staging area management ────────────────────────────────────
+
+    @server.tool()
+    async def staging_list(
+        ctx: Context | None = None,
+    ) -> str:
+        """List all staging areas.
+
+        Staging areas are named references to host paths that can be mounted
+        into containers.
+        """
+        client = _build_client(cfg)
+        try:
+            result = client.staging_list()
+            return _to_json(result)
+        except CaasError as exc:
+            return _to_json({"error": str(exc)})
+        finally:
+            client.close()
+
+    @server.tool()
+    async def staging_create(
+        name: str,
+        host_path: str,
+        dest_path: str | None = None,
+        ctx: Context | None = None,
+    ) -> str:
+        """Create a staging area — a named reference to a host path mount.
+
+        Staging areas can be used as volume sources when creating jobs or
+        sandboxes.
+
+        Args:
+            name: A human-readable name for this staging area.
+            host_path: The host filesystem path to bind-mount. Must be under
+                       an allowed directory.
+            dest_path: Optional container destination path. Defaults to the
+                       host path value.
+        """
+        client = _build_client(cfg)
+        try:
+            result = client.staging_create(name=name, host_path=host_path, dest_path=dest_path)
+            return _to_json(result)
+        except CaasError as exc:
+            return _to_json({"error": str(exc)})
+        finally:
+            client.close()
+
+    @server.tool()
+    async def staging_delete(
+        staging_id: str,
+        ctx: Context | None = None,
+    ) -> str:
+        """Remove a staging area.
+
+        Args:
+            staging_id: The staging area ID returned by ``staging_list``.
+        """
+        client = _build_client(cfg)
+        try:
+            result = client.staging_delete(staging_id)
+            return _to_json(result)
+        except CaasError as exc:
+            return _to_json({"error": str(exc)})
+        finally:
+            client.close()
+
     return server
 
 

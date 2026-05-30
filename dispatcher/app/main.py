@@ -32,6 +32,7 @@ import logging
 import threading
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from fastapi import FastAPI, HTTPException, Header, Depends
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -139,6 +140,27 @@ QUEUE_TIMEOUT = _parse_queue_timeout()
 resource_slots = ResourceSlots.from_env()
 
 
+# ── Sandbox TTL (background reaper) ───────────────────────────────────────────
+
+def _parse_sandbox_ttl() -> int:
+    raw = os.getenv("SANDBOX_TTL_SECS", "1800")  # 30 minutes default
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning(
+            "SANDBOX_TTL_SECS=%r is not a valid integer – falling back to 1800s.",
+            raw,
+        )
+        return 1800
+    if value < 0:
+        logger.warning(
+            "SANDBOX_TTL_SECS=%r is negative – using 0 (no sandbox reaping).",
+            raw,
+        )
+        return 0
+    return value
+
+
 def _acquire_slot(resource: str) -> None:
     """Block until a slot is free, or raise 503 after QUEUE_TIMEOUT seconds."""
     if not resource_slots.acquire(resource, timeout=QUEUE_TIMEOUT):
@@ -167,11 +189,46 @@ async def lifespan(app: FastAPI):
     job_store.hydrate_from_docker(client)
     populate_image_registry(client)
 
-    # Start the schedule scanner that periodically wakes pending schedules.
+    # Recover sandbox containers: scan for containers with caas.sandbox=true and
+    # sync their resource slots so the dispatcher accurately reflects occupied
+    # hardware after a restart.
+    try:
+        sandbox_containers = client.containers.list(
+            filters={"label": "caas.sandbox=true"}
+        )
+        for sc in sandbox_containers:
+            record = job_store.get(sc.id)
+            if record is not None:
+                sandbox_hydrate_container(sc, record)
+                logger.info("Restored sandbox %s (%s slot)", record.job_id[:12], record.resource_type)
+            else:
+                # Container exists but record may have been evicted – still need to
+                # acquire the slot so the next job assignment is accurate.
+                record = JobRecord(
+                    job_id=sc.id,
+                    container_id=sc.id,
+                    image=sc.image.tags[0] if sc.image.tags else sc.image.short_id,
+                    cmd=sc.attrs.get("Config", {}).get("Cmd"),
+                    job_type="sandbox",
+                    submitted_at=datetime.now(timezone.utc),
+                    resource_type=_determine_resource_type(sc),
+                )
+                job_store._jobs[sc.id] = record  # pylint: disable=protected-access
+                sandbox_hydrate_container(sc, record)
+                logger.info("Recovered orphan sandbox %s (%s slot)", sc.id[:12], record.resource_type)
+    except Exception as exc:
+        logger.warning("Failed to recover sandbox containers: %s", exc)
+
+    # Start the sandbox reaper that cleans up idle sandboxes to prevent GPU
+    # slot deadlock (a zombie sandbox holding a GPU indefinitely is the only
+    # way the slot pool can exhaust with no running jobs).
     import app.api_extensions as _ext
-    task = asyncio.ensure_future(_ext._scan_schedules())
+    schedule_task = asyncio.ensure_future(_ext._scan_schedules())
+    reaper_task = asyncio.ensure_future(_reap_sandbox(idle_seconds=_parse_sandbox_ttl()))
+
     yield
-    task.cancel()
+    schedule_task.cancel()
+    reaper_task.cancel()
 
 
 app = FastAPI(title="Compute Service Dispatcher", lifespan=lifespan)
@@ -203,6 +260,44 @@ if _ui_dir is not None:
 
 client = docker.from_env()
 job_store = JobStore()
+
+# ── Sandbox helpers ───────────────────────────────────────────────────────────
+# These are populated after hydrate_from_docker() runs in the lifespan.
+
+
+def _determine_resource_type(container) -> str:
+    """Inspect a container's Docker attrs and return its resource type ("gpu" or "cpu")."""
+    reqs = container.attrs.get("HostConfig", {}).get("DeviceRequests") or []
+    for req in reqs:
+        if req.get("capabilities") and "gpu" in req["capabilities"]:
+            return "gpu"
+    return "cpu"
+
+
+def sandbox_hydrate_container(container, record) -> None:
+    """Sync ResourceSlots state for a recovered sandbox container.
+
+    Scans the container's Docker attributes to determine whether it holds a
+    GPU or CPU slot, then decrements the appropriate semaphore. Runs at
+    dispatcher startup after JobStore.hydrate_from_docker() so the process
+    accurately reflects hardware that other containers are occupying.
+
+    Uses timeout=0 to fail-fast if a slot is somehow already held (safety
+    against double-acquisition).  The container record is not modified.
+    """
+    resource = _determine_resource_type(container)
+    resource_slots.acquire(resource, timeout=0)
+    sandbox_last_access[record.job_id] = record.submitted_at
+
+
+def _release_sandbox_slots(job) -> None:
+    """Release resource slot and clean tracker for an exited sandbox.
+
+    Uses ``job.resource_type`` (recorded at creation) so the call is
+    deterministic even if the Docker container has been obliterated.
+    """
+    sandbox_last_access.pop(job.job_id, None)
+    resource_slots.release(job.resource_type)
 
 # ── Persistent data store ────────────────────────────────────────────────────
 # Mounted at /srv/caas-data in the container so data survives restarts.
@@ -238,6 +333,11 @@ def get_api_key(x_api_key: t.Optional[str] = Header(None)):
     if not x_api_key or x_api_key != API_KEY:
         raise HTTPException(status_code=401, detail="Invalid API Key")
     return True
+
+
+# ── Sandbox tracking (persistent interactive containers) ─────────────────────
+
+sandbox_last_access: dict[str, datetime] = {}
 
 
 # ── Extension API router ─────────────────────────────────────────────────────
@@ -287,6 +387,16 @@ class CellRequest(ContainerOptions):
             "a multi-page banner to stdout before exec-ing the user command."
         ),
     )
+
+
+class SandboxRequest(ContainerOptions):
+    """Request model for /v1/sandbox."""
+    pass
+
+
+class ExecRequest(BaseModel):
+    """Request model for /v1/jobs/{job_id}/exec."""
+    cmd: str
 
 # ── Docker helpers ────────────────────────────────────────────────────────────
 
@@ -487,6 +597,9 @@ def _enrich_job_data(job, data: dict) -> None:
             if docker_status in _TERMINAL_STATES:
                 exit_code = container.attrs.get("State", {}).get("ExitCode")
                 job_store.mark_stopped(job.job_id, exit_code=exit_code)
+                # Release resource slot if this is a sandbox (unexpected exit).
+                if job.job_type == "sandbox":
+                    _release_sandbox_slots(job)
                 data["status"] = "stopped"
                 data["exit_code"] = exit_code
                 refreshed = job_store.get(job.job_id)
@@ -496,8 +609,12 @@ def _enrich_job_data(job, data: dict) -> None:
                 stats = _fetch_resources(container)
                 data["resources"] = stats.model_dump() if stats else None
         except NotFound:
+            # Container was obliterated out-of-band (docker rm -f, prune, etc.).
+            # Use the stored resource_type for deterministic slot release.
             job_store.mark_stopped(job.job_id)
             data["status"] = "stopped"
+            if job.job_type == "sandbox":
+                _release_sandbox_slots(job)
             refreshed = job_store.get(job.job_id)
             enriched_record = refreshed or job
             registry.on_job_complete(enriched_record, None)
@@ -552,6 +669,10 @@ def stop_job(job_id: str, authorized: bool = Depends(get_api_key)):
     except DockerException as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+    # Release resource slot if this was a sandbox.
+    if job.job_type == "sandbox":
+        _release_sandbox_slots(job)
+
     # Only fire the completion hook if the job was actually running before
     # this request — prevents double-firing if DELETE is retried on an
     # already-stopped job.
@@ -561,6 +682,147 @@ def stop_job(job_id: str, authorized: bool = Depends(get_api_key)):
 
     return JSONResponse({"job_id": job_id, "status": "stopped"})
 
+
+# ── Sandbox endpoints ─────────────────────────────────────────────────────────
+
+@app.post("/v1/sandbox")
+def create_sandbox(req: SandboxRequest, authorized: bool = Depends(get_api_key)):
+    """Create a persistent interactive container (sandbox).
+
+    The sandbox runs ``sleep infinity`` and stays alive for incremental
+    command execution via ``POST /v1/jobs/{job_id}/exec``.  Sandboxes hold
+    their resource slot (GPU or CPU) indefinitely — until explicitly stopped
+    or reclaimed by the background reaper task.
+
+    Resource acquisition:
+    ────────────────────
+    The resource slot is acquired *before* container creation so that the
+    dispatcher accurately reflects hardware occupancy.  If the container
+    creation fails the slot is released (``finally`` block).
+    """
+    resource = "gpu" if req.gpu is not None else "cpu"
+    _acquire_slot(resource)
+    released = False
+    try:
+        run_kwargs = _prepare_run(req)
+        run_kwargs["command"] = ["sleep", "infinity"]
+        run_kwargs["labels"] = {**run_kwargs.get("labels", {}), "caas.sandbox": "true"}
+
+        # Plugins validate first (shm policy, volume policy, etc.) — before pull.
+        registry.pre_create(req, run_kwargs)
+        _ensure_image(req.image)
+
+        run_kwargs["detach"] = True
+        container = client.containers.run(req.image, **run_kwargs)
+
+        record = job_store.register(
+            container, image=req.image, cmd=["sleep", "infinity"],
+            job_type="sandbox", resource_type=resource,
+        )
+        sandbox_last_access[record.job_id] = datetime.now(timezone.utc)
+        registry.on_register(record)
+
+        resource_slots.release(resource)
+        released = True
+        return JSONResponse({
+            "sandbox_id": record.job_id,
+            "status": "running",
+            "resource_type": resource,
+        })
+    except HTTPException:
+        raise
+    except DockerException as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if not released:
+            resource_slots.release(resource)
+
+
+@app.post("/v1/jobs/{job_id}/exec")
+def exec_in_sandbox(job_id: str, req: ExecRequest, authorized: bool = Depends(get_api_key)):
+    """Execute a command inside a sandbox container.
+
+    The container must have ``job_type="sandbox"`` or the request is rejected
+    with 400.  On success the sandbox's ``sandbox_last_access`` timestamp is
+    refreshed so the reaper considers the sandbox active.
+    """
+    job = job_store.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
+    if job.job_type != "sandbox":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Job {job_id} is not a sandbox (job_type={job.job_type!r})",
+        )
+
+    try:
+        container = client.containers.get(job_id)
+    except NotFound:
+        job_store.mark_stopped(job_id)
+        _release_sandbox_slots(job)
+        raise HTTPException(status_code=404, detail=f"Sandbox container not found: {job_id}")
+
+    try:
+        result = container.exec_run(req.cmd, demux=True)
+        exit_code = result.exit_code
+        stdout = result.output.decode(errors="replace") if result.output else ""
+    except ContainerError as e:
+        stdout = ""
+        stderr = e.stderr.decode(errors="replace") if isinstance(e.stderr, bytes) else (e.stderr or "")
+        return JSONResponse({
+            "stdout": stdout,
+            "stderr": stderr,
+            "exit_code": e.exit_status,
+        })
+    except DockerException as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    sandbox_last_access[job_id] = datetime.now(timezone.utc)
+    return JSONResponse({
+        "stdout": stdout,
+        "exit_code": exit_code,
+    })
+
+
+# ── Sandbox reaper ───────────────────────────────────────────────────────────
+
+async def _reap_sandbox(idle_seconds: int, check_interval: int = 60) -> None:
+    """Background task that kills sandboxes idle beyond the configured TTL.
+
+    Runs every ``check_interval`` seconds.  Each cycle collects sandbox IDs
+    whose ``sandbox_last_access`` is older than ``idle_seconds``, stops their
+    containers, and releases their resource slots — matching the cleanup
+    performed by the explicit ``DELETE /v1/jobs/{id}`` endpoint.
+    """
+    if idle_seconds <= 0:
+        return  # reaper disabled
+    while True:
+        await asyncio.sleep(check_interval)
+        now = datetime.now(timezone.utc)
+        to_reap: list[str] = []
+        for sid, last_access in list(sandbox_last_access.items()):
+            if (now - last_access).total_seconds() > idle_seconds:
+                to_reap.append(sid)
+        if not to_reap:
+            continue
+        for sid in to_reap:
+            job = job_store.get(sid)
+            if job is None:
+                sandbox_last_access.pop(sid, None)
+                continue
+            try:
+                container = client.containers.get(sid)
+                container.stop()
+                container.remove()
+            except (NotFound, DockerException) as e:
+                logger.warning("Sandbox reaper: failed to stop sandbox %s: %s", sid[:12], e)
+            _release_sandbox_slots(job)
+            job_store.mark_stopped(sid)
+            registry.on_job_complete(job_store.get(sid) or job, None)
+            logger.info("Reaped idle sandbox %s (idle > %ds)", sid[:12], idle_seconds)
+
+
+# ── Job registry ──────────────────────────────────────────────────────────────
 
 @app.get("/v1/logs/{container_id}")
 def get_logs(container_id: str, follow: bool = False, authorized: bool = Depends(get_api_key)):

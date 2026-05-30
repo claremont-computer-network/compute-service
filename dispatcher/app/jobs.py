@@ -52,9 +52,9 @@ class JobRecord(BaseModel):
     image: str
     cmd: t.Union[str, t.List[str], None] = None
     # Execution mode: "cell" for synchronous execute_cell jobs, "detached" for
-    # background /v1/execute jobs.  Used by ResourceSamplerPlugin to decide
-    # whether to start a background sampling thread (cell jobs complete before
-    # the client can poll for live stats, so history must be collected inline).
+    # background /v1/execute jobs, "sandbox" for persistent interactive containers.
+    # Used by ResourceSamplerPlugin to decide whether to start a background
+    # sampling thread, and by resource management code for slot tracking.
     job_type: str = "detached"
     submitted_at: datetime
     status: str = "running"                        # running | stopped
@@ -71,6 +71,10 @@ class JobRecord(BaseModel):
     # Excluded from model_dump() so job-list/detail responses never embed the
     # full log payload; logs are served exclusively via GET /v1/logs/{id}.
     stored_logs: t.Optional[str] = Field(default=None, exclude=True)
+    # Which resource slot this job consumed (e.g. "gpu" or "cpu"). Tracked
+    # in the record so slot release is deterministic even if the container
+    # has been obliterated from the Docker daemon before cleanup runs.
+    resource_type: str = "cpu"
 
 
 def _parse_gpu_stats() -> t.Optional[list[GpuStats]]:
@@ -193,7 +197,8 @@ class JobStore:
 
     def register(self, container, image: str,
                  cmd: t.Union[str, t.List[str], None] = None,
-                 job_type: str = "detached") -> JobRecord:
+                 job_type: str = "detached",
+                 resource_type: str = "cpu") -> JobRecord:
         """Record a newly started detached container (docker_backed=True)."""
         record = JobRecord(
             job_id=container.id,
@@ -203,6 +208,7 @@ class JobStore:
             cmd=cmd,
             job_type=job_type,
             submitted_at=datetime.now(timezone.utc),
+            resource_type=resource_type,
         )
         with self._lock:
             self._jobs[record.job_id] = record

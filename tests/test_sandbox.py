@@ -40,7 +40,7 @@ def _create_mock_sandbox_container(api_client, mock_docker_client, is_gpu=False)
 
     container.exec_run.return_value = MagicMock(
         exit_code=0,
-        output=b"bash: python3 -c 'print(42)'\\n42\\n",
+        output=b"42\n",
     )
 
     return container
@@ -129,18 +129,20 @@ def test_create_sandbox_gpu_acquires_gpu_slot(api_client):
     assert "gpu" in acquired
 
 
-def test_create_sandbox_releases_slot_on_success(api_client, mock_docker_client):
-    """A sandbox must release its slot after successful creation."""
+def test_create_sandbox_holds_slot_for_lifetime(api_client, mock_docker_client):
+    """A sandbox must HOLD its slot for lifetime — releasing it on success would
+    allow double-acquisition. The slot is only released on DELETE/enrich/reaper."""
     import app.main as m
     released = []
     original_release = m.resource_slots.release
     def _track_release(resource):
         released.append(resource)
-        return
+        return original_release(resource)
     m.resource_slots.release = _track_release
 
     _submit_sandbox(api_client)
-    assert "cpu" in released
+    # Slot must NOT be released on successful sandbox creation
+    assert "cpu" not in released
 
 
 def test_create_sandbox_releases_slot_on_docker_exception(api_client, mock_docker_client):
@@ -436,6 +438,38 @@ def test_sandbox_record_stores_resource_type(api_client, mock_docker_client):
     _submit_sandbox(api_client)
     job = m.job_store.list_all()[0]
     assert job.resource_type == "cpu"
+
+
+def test_release_sandbox_slots_is_idempotent():
+    """Calling _release_sandbox_slots() multiple times must not inflate slot count."""
+    import app.main as m
+    from app.jobs import JobRecord
+    from datetime import datetime, timezone
+
+    job = JobRecord(
+        job_id="idem000000000100",
+        container_id="idem0000000100",
+        image="python:3.11-slim",
+        job_type="sandbox",
+        submitted_at=datetime.now(timezone.utc),
+        resource_type="cpu",
+    )
+    m.sandbox_last_access[job.job_id] = datetime.now(timezone.utc)
+
+    released = []
+    original_release = m.resource_slots.release
+    def _track(resource):
+        released.append(resource)
+        return original_release(resource)
+    m.resource_slots.release = _track
+
+    # First call: releases slot and clears tracker
+    m._release_sandbox_slots(job)
+    assert len(released) == 1
+
+    # Second call: tracker is empty, must skip release
+    m._release_sandbox_slots(job)
+    assert len(released) == 1, "Idempotent release must not call Semaphore.release() twice"
 
 
 def test_gpu_sandbox_record_stores_gpu_resource_type(api_client, mock_docker_client):

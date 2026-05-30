@@ -40,7 +40,7 @@ from pydantic import BaseModel, Field
 import docker
 from docker.errors import DockerException, NotFound, ContainerError
 from dotenv import load_dotenv
-from app.jobs import JobStore, _fetch_resources
+from app.jobs import JobStore, JobRecord, _fetch_resources
 from app.core.plugin import registry
 from app.core.data_store import DataStore, DEFAULT_DATA_DIR
 from app.plugins import register_default_plugins
@@ -266,11 +266,23 @@ job_store = JobStore()
 
 
 def _determine_resource_type(container) -> str:
-    """Inspect a container's Docker attrs and return its resource type ("gpu" or "cpu")."""
+    """Inspect a container's Docker attrs and return its resource type ("gpu" or "cpu").
+
+    Docker stores device requests under ``HostConfig.DeviceRequests``.  Each
+    request has a ``Capabilities`` key (capital C) with value
+    ``[["gpu"], ...]`` (list-of-lists).
+    """
     reqs = container.attrs.get("HostConfig", {}).get("DeviceRequests") or []
     for req in reqs:
-        if req.get("capabilities") and "gpu" in req["capabilities"]:
-            return "gpu"
+        caps = req.get("Capabilities") or req.get("capabilities")
+        if caps:
+            for level in caps:
+                if isinstance(level, list):
+                    for item in level:
+                        if item == "gpu":
+                            return "gpu"
+                elif level == "gpu":
+                    return "gpu"
     return "cpu"
 
 
@@ -283,19 +295,34 @@ def sandbox_hydrate_container(container, record) -> None:
     accurately reflects hardware that other containers are occupying.
 
     Uses timeout=0 to fail-fast if a slot is somehow already held (safety
-    against double-acquisition).  The container record is not modified.
+    against double-acquisition).  Raises RuntimeError on failure so the
+    caller can abort recovery gracefully rather than silently corrupting
+    slot accounting.
+
+    Sets ``sandbox_last_access`` to *now* (not ``record.submitted_at``) so
+    the recovered sandbox is not immediately flagged as idle by the reaper.
+    The container record is not modified.
     """
     resource = _determine_resource_type(container)
-    resource_slots.acquire(resource, timeout=0)
-    sandbox_last_access[record.job_id] = record.submitted_at
+    if not resource_slots.acquire(resource, timeout=0):
+        raise RuntimeError(
+            f"Slot {resource!r} already held for recovered sandbox "
+            f"{record.job_id[:12]} — possible slot corruption"
+        )
+    sandbox_last_access[record.job_id] = datetime.now(timezone.utc)
 
 
 def _release_sandbox_slots(job) -> None:
     """Release resource slot and clean tracker for an exited sandbox.
 
+    Idempotent: guard with ``sandbox_last_access`` so repeated cleanup
+    (e.g. enrich detects exit then DELETE runs later) only releases once.
+
     Uses ``job.resource_type`` (recorded at creation) so the call is
     deterministic even if the Docker container has been obliterated.
     """
+    if job.job_id not in sandbox_last_access:
+        return
     sandbox_last_access.pop(job.job_id, None)
     resource_slots.release(job.resource_type)
 
@@ -722,7 +749,6 @@ def create_sandbox(req: SandboxRequest, authorized: bool = Depends(get_api_key))
         sandbox_last_access[record.job_id] = datetime.now(timezone.utc)
         registry.on_register(record)
 
-        resource_slots.release(resource)
         released = True
         return JSONResponse({
             "sandbox_id": record.job_id,
@@ -763,7 +789,7 @@ def exec_in_sandbox(job_id: str, req: ExecRequest, authorized: bool = Depends(ge
         raise HTTPException(status_code=404, detail=f"Sandbox container not found: {job_id}")
 
     try:
-        result = container.exec_run(req.cmd, demux=True)
+        result = container.exec_run(req.cmd)
         exit_code = result.exit_code
         stdout = result.output.decode(errors="replace") if result.output else ""
     except ContainerError as e:

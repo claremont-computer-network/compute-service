@@ -386,7 +386,7 @@ class CaasClient:
             payload["env"] = env
         if volumes:
             payload["volumes"] = volumes
-        if gpu is not None:
+        if gpu:
             payload["gpu"] = gpu
         if shm_size is not None:
             payload["shm_size"] = shm_size

@@ -758,7 +758,7 @@ def test_sandbox_create_includes_env_and_gpu(client, mock_transport):
 
 
 def test_sandbox_create_omits_none_fields(client, mock_transport):
-    """sandbox_create() does not include env/gpu/shm_size when they are None."""
+    """sandbox_create() omits empty optional payload fields."""
     import json
 
     def _check(request):
@@ -769,7 +769,7 @@ def test_sandbox_create_omits_none_fields(client, mock_transport):
         return _make_response(200, {"sandbox_id": "sbox002", "status": "running"})
 
     mock_transport[("POST", f"{BASE_URL}/v1/sandbox")] = _check
-    client.sandbox_create(image="alpine:3.18")
+    client.sandbox_create(image="alpine:3.18", gpu={})
 
 
 def test_sandbox_create_raises_on_error(client, mock_transport):

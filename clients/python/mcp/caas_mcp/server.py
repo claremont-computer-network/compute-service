@@ -703,11 +703,13 @@ def make_server(cfg: Config | None = None) -> FastMCP:
             job = client.job(sandbox_id)
             if not job:
                 return _to_json({"error": "Sandbox not found"})
+            if job.get("job_type") != "sandbox":
+                return _to_json({"error": f"Job {sandbox_id} is not a sandbox"})
             return _to_json({
                 "status": job.get("status"),
                 "job_type": job.get("job_type"),
                 "image": job.get("image"),
-                "last_accessed": job.get("last_accessed"),
+                "submitted_at": job.get("submitted_at"),
             })
         except CaasError as exc:
             return _to_json({"error": str(exc)})
@@ -782,6 +784,16 @@ def make_server(cfg: Config | None = None) -> FastMCP:
                     res[key] = res[key][-MAX_CHARS:] + f"\n\n[System Note: {key} truncated.]"
 
             return _to_json(res)
+        except CaasTimeoutError as exc:
+            return _to_json({
+                "status": "timeout",
+                "message": str(exc),
+                "guidance": (
+                    "The dispatcher timed out waiting for a response. "
+                    "The command may still be running in the sandbox.  Use "
+                    "sandbox://{sandbox_id}/status or the get_logs tool to verify state."
+                ),
+            })
         except CaasError as exc:
             return _to_json({"error": str(exc)})
         finally:
@@ -795,8 +807,13 @@ def make_server(cfg: Config | None = None) -> FastMCP:
         """Stop and remove a sandbox."""
         client = _build_client(cfg)
         try:
-            client.stop(sandbox_id)
-            return _to_json({"status": "stopped", "sandbox_id": sandbox_id})
+            job = client.job(sandbox_id)
+            if not job:
+                return _to_json({"error": "Sandbox not found"})
+            if job.get("job_type") != "sandbox":
+                return _to_json({"error": f"Job {sandbox_id} is not a sandbox"})
+            result = client.stop(sandbox_id)
+            return _to_json(result)
         except CaasError as exc:
             return _to_json({"error": str(exc)})
         finally:

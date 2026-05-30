@@ -460,6 +460,9 @@ async def test_sandbox_exec_tool():
 async def test_sandbox_stop_tool():
     """sandbox_stop calls DELETE /v1/jobs/{id} and returns stopped status."""
     mt = _make_mock_transport({})
+    mt[("GET", f"{BASE_URL}/v1/jobs/sbox001")] = _make_response(
+        200, {"job_id": "sbox001", "job_type": "sandbox", "status": "running"}
+    )
     mt[("DELETE", f"{BASE_URL}/v1/jobs/sbox001")] = _make_response(
         200, {"job_id": "sbox001", "status": "stopped"}
     )
@@ -472,7 +475,11 @@ async def test_sandbox_stop_tool():
 
     server = make_server(cfg)
 
-    await server.call_tool("sandbox_stop", {"sandbox_id": "sbox001"})
+    result = await server.call_tool("sandbox_stop", {"sandbox_id": "sbox001"})
+    content_text = result[0][0].text if hasattr(result[0][0], "text") else result[0][0]
+    parsed = _json.loads(content_text)
+    assert parsed["job_id"] == "sbox001"
+    assert parsed["status"] == "stopped"
 
 
 @pytest.mark.asyncio
@@ -484,7 +491,7 @@ async def test_sandbox_status_resource():
             "status": "running",
             "job_type": "sandbox",
             "image": "python:3.11-slim",
-            "last_accessed": "2026-01-01T12:00:00+00:00",
+            "submitted_at": "2026-01-01T12:00:00+00:00",
         }
     )
 
@@ -509,7 +516,26 @@ async def test_sandbox_status_resource():
     assert parsed["status"] == "running"
     assert parsed["job_type"] == "sandbox"
     assert parsed["image"] == "python:3.11-slim"
-    assert parsed["last_accessed"] == "2026-01-01T12:00:00+00:00"
+    assert parsed["submitted_at"] == "2026-01-01T12:00:00+00:00"
+
+
+@pytest.mark.asyncio
+async def test_sandbox_status_resource_rejects_non_sandbox_job():
+    mt = _make_mock_transport({})
+    mt[("GET", f"{BASE_URL}/v1/jobs/job001")] = _make_response(
+        200, {"status": "running", "job_type": "normal", "image": "python:3.11-slim"}
+    )
+
+    from caas_mcp.config import Config
+    from caas_mcp.server import make_server
+
+    cfg = Config(dispatcher_url=BASE_URL)
+    cfg._mock_http = httpx.Client(transport=mt)
+
+    server = make_server(cfg)
+    resources = await server.read_resource("sandbox://job001/status")
+    parsed = _json.loads(resources[0].content)
+    assert "not a sandbox" in parsed["error"]
 
 
 @pytest.mark.asyncio
@@ -537,3 +563,48 @@ async def test_sandbox_exec_truncates_large_output():
     assert len(parsed["stderr"]) <= 8000 + 46  # 8000 + "[System Note: stderr truncated.]"
     assert "truncated" in parsed["stdout"]
     assert "truncated" in parsed["stderr"]
+
+
+@pytest.mark.asyncio
+async def test_sandbox_exec_timeout_returns_timeout_payload(monkeypatch: pytest.MonkeyPatch):
+    from caas.client import CaasTimeoutError
+    from caas_mcp.config import Config
+    from caas_mcp.server import make_server
+
+    cfg = Config(dispatcher_url=BASE_URL)
+    server = make_server(cfg)
+
+    class _Client:
+        def sandbox_exec(self, _sandbox_id: str, _cmd: str):
+            raise CaasTimeoutError("timed out")
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr("caas_mcp.server._build_client", lambda _cfg: _Client())
+
+    result = await server.call_tool("sandbox_exec", {"sandbox_id": "sbox001", "cmd": "run"})
+    content_text = result[0][0].text if hasattr(result[0][0], "text") else result[0][0]
+    parsed = _json.loads(content_text)
+    assert parsed["status"] == "timeout"
+    assert "timed out" in parsed["message"]
+
+
+@pytest.mark.asyncio
+async def test_sandbox_stop_rejects_non_sandbox_job():
+    mt = _make_mock_transport({})
+    mt[("GET", f"{BASE_URL}/v1/jobs/job001")] = _make_response(
+        200, {"job_id": "job001", "job_type": "normal", "status": "running"}
+    )
+
+    from caas_mcp.config import Config
+    from caas_mcp.server import make_server
+
+    cfg = Config(dispatcher_url=BASE_URL)
+    cfg._mock_http = httpx.Client(transport=mt)
+    server = make_server(cfg)
+
+    result = await server.call_tool("sandbox_stop", {"sandbox_id": "job001"})
+    content_text = result[0][0].text if hasattr(result[0][0], "text") else result[0][0]
+    parsed = _json.loads(content_text)
+    assert "not a sandbox" in parsed["error"]

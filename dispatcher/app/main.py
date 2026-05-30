@@ -767,7 +767,11 @@ def create_sandbox(req: SandboxRequest, authorized: bool = Depends(get_api_key))
     """
     resource = "gpu" if req.gpu is not None else "cpu"
     _acquire_slot(resource)
-    released = False
+    # When True the finally block skips the slot release: either because the
+    # sandbox was successfully created and holds the slot for its lifetime, or
+    # because the container could not be stopped and releasing the slot would
+    # cause over-allocation while it is still running.
+    skip_slot_release = False
     container = None
     record = None
     try:
@@ -790,7 +794,8 @@ def create_sandbox(req: SandboxRequest, authorized: bool = Depends(get_api_key))
         with sandbox_last_access_lock:
             sandbox_last_access[record.job_id] = datetime.now(timezone.utc)
 
-        released = True
+        # Sandbox created — slot is held for the sandbox lifetime.
+        skip_slot_release = True
         return JSONResponse({
             "sandbox_id": record.job_id,
             "status": "running",
@@ -819,7 +824,7 @@ def create_sandbox(req: SandboxRequest, authorized: bool = Depends(get_api_key))
             else:
                 # Container is still running — keep the slot held so it is not
                 # over-allocated while the orphaned sandbox occupies resources.
-                released = True
+                skip_slot_release = True
         if record is not None:
             job_store.mark_stopped(record.job_id)
             stopped_record = job_store.get(record.job_id)
@@ -827,7 +832,7 @@ def create_sandbox(req: SandboxRequest, authorized: bool = Depends(get_api_key))
                 registry.on_job_complete(stopped_record or record, None)
         raise HTTPException(status_code=500, detail=str(e))
     finally:
-        if not released:
+        if not skip_slot_release:
             resource_slots.release(resource)
 
 

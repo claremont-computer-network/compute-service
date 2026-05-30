@@ -221,9 +221,8 @@ def test_stop_job_marks_stopped_before_remove(api_client, mock_docker_client):
     mock_docker_client.containers.get.side_effect = _get_side_effect
 
     resp = api_client.delete(f"{JOBS_URL}/{job_id}")
-    # remove() failure propagates as 500 …
-    assert resp.status_code == 500
-    # … but the registry must still reflect the stopped state
+    # remove() failure is non-fatal: log warning and return 200 so slot cleanup runs
+    assert resp.status_code == 200
     assert m.job_store.get(job_id).status == "stopped"
 
 

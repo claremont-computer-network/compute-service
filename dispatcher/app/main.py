@@ -694,9 +694,9 @@ def stop_job(job_id: str, authorized: bool = Depends(get_api_key)):
     except NotFound:
         pass
     except DockerException as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.warning("Failed to remove container %s for job %s: %s", job.container_id, job_id, e)
 
-    # Release resource slot if this was a sandbox.
+    # Release resource slot if this was a sandbox (always runs, even if container remove failed).
     if job.job_type == "sandbox":
         _release_sandbox_slots(job)
 
@@ -782,10 +782,11 @@ def exec_in_sandbox(job_id: str, req: ExecRequest, authorized: bool = Depends(ge
         )
 
     try:
-        container = client.containers.get(job_id)
+        container = client.containers.get(job.container_id)
     except NotFound:
         job_store.mark_stopped(job_id)
         _release_sandbox_slots(job)
+        registry.on_job_complete(job, None)
         raise HTTPException(status_code=404, detail=f"Sandbox container not found: {job_id}")
 
     try:
@@ -836,16 +837,26 @@ async def _reap_sandbox(idle_seconds: int, check_interval: int = 60) -> None:
             if job is None:
                 sandbox_last_access.pop(sid, None)
                 continue
-            try:
-                container = client.containers.get(sid)
-                container.stop()
-                container.remove()
-            except (NotFound, DockerException) as e:
-                logger.warning("Sandbox reaper: failed to stop sandbox %s: %s", sid[:12], e)
-            _release_sandbox_slots(job)
-            job_store.mark_stopped(sid)
-            registry.on_job_complete(job_store.get(sid) or job, None)
-            logger.info("Reaped idle sandbox %s (idle > %ds)", sid[:12], idle_seconds)
+    container_stopped = False
+    try:
+        try:
+            container = client.containers.get(sid)
+            container.stop()
+            container.remove()
+            container_stopped = True
+        except NotFound:
+            # Container already gone — nothing to stop/remove.
+            pass
+    except DockerException as e:
+        logger.warning("Sandbox reaper: Docker error stopping sandbox %s: %s", sid[:12], e)
+
+    # Always release slot and mark stopped, even when container operations fail.
+    # The container is no longer running from the system's perspective — we must
+    # still clean up the dispatcher's accounting so the slot becomes available.
+    _release_sandbox_slots(job)
+    job_store.mark_stopped(sid)
+    registry.on_job_complete(job_store.get(sid) or job, None)
+    logger.info("Reaped idle sandbox %s (idle > %ds)", sid[:12], idle_seconds)
 
 
 # ── Job registry ──────────────────────────────────────────────────────────────

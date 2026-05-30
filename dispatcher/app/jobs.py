@@ -24,12 +24,24 @@ from pydantic import BaseModel, Field
 logger = logging.getLogger("caas.jobs")
 
 
+class GpuStats(BaseModel):
+    """GPU usage snapshot from nvidia-smi query output."""
+    device_id: int
+    gpu_name: str
+    temperature: int       # ℃
+    memory_used_mib: float
+    memory_total_mib: float
+    memory_percent: float
+    utilization_percent: float
+
+
 class ResourceStats(BaseModel):
     """Live resource usage snapshot fetched from the Docker stats API."""
     cpu_percent: float
     mem_usage_mib: float   # mebibytes (÷ 1024²) — matches Docker's own display
     mem_limit_mib: float
     mem_percent: float
+    gpu: t.Optional[list[GpuStats]] = None  # GPU stats, populated only on GPU containers
 
 
 class JobRecord(BaseModel):
@@ -61,9 +73,49 @@ class JobRecord(BaseModel):
     stored_logs: t.Optional[str] = Field(default=None, exclude=True)
 
 
+def _parse_gpu_stats() -> t.Optional[list[GpuStats]]:
+    """Parse nvidia-smi output into a list of GpuStats.
+
+    Returns None if nvidia-smi is unavailable or fails.
+    """
+    import subprocess
+
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=index,name,temperature.gpu,memory.used,memory.total,utilization.gpu",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode != 0:
+            return None
+        gpus = []
+        for line in result.stdout.strip().split("\n"):
+            if not line.strip():
+                continue
+            parts = [p.strip() for p in line.split(",")]
+            if len(parts) < 6:
+                continue
+            memory_used_mib = round(float(parts[3]), 2)
+            memory_total_mib = round(float(parts[4]), 2)
+            memory_percent = round((memory_used_mib / memory_total_mib * 100.0), 2) if memory_total_mib > 0 else 0.0
+            gpus.append(GpuStats(
+                device_id=int(parts[0]),
+                gpu_name=parts[1],
+                temperature=int(parts[2]),
+                memory_used_mib=memory_used_mib,
+                memory_total_mib=memory_total_mib,
+                memory_percent=memory_percent,
+                utilization_percent=round(float(parts[5]), 1),
+            ))
+        return gpus or None
+    except (FileNotFoundError, subprocess.TimeoutExpired, ValueError, ZeroDivisionError):
+        return None
+
+
 def _fetch_resources(container) -> t.Optional[ResourceStats]:
     """Call the Docker stats API (single-shot) and compute derived metrics.
 
+    Also queries nvidia-smi for GPU stats when the host has NVIDIA GPUs.
     Returns None if the container is no longer running or stats are
     unavailable — callers must handle this gracefully.
     """
@@ -94,12 +146,14 @@ def _fetch_resources(container) -> t.Optional[ResourceStats]:
         mem_usage_mib = usage / (1024 ** 2)
         mem_limit_mib = limit / (1024 ** 2)
         mem_percent = (usage / limit * 100.0) if limit > 0 else 0.0
+        gpu_stats = _parse_gpu_stats()
 
         return ResourceStats(
             cpu_percent=round(cpu_percent, 2),
             mem_usage_mib=round(mem_usage_mib, 2),
             mem_limit_mib=round(mem_limit_mib, 2),
             mem_percent=round(mem_percent, 2),
+            gpu=gpu_stats,
         )
     except (KeyError, TypeError, ZeroDivisionError) as exc:
         logger.debug("Ignoring malformed Docker stats payload: %s", exc)

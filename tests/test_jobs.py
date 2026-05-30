@@ -100,6 +100,27 @@ def test_list_jobs_includes_resource_stats(api_client, mock_docker_client):
     assert "mem_usage_mib" in jobs[0]["resources"]
 
 
+def test_parse_gpu_stats_computes_memory_percent(monkeypatch):
+    """GPU memory percent is derived from used/total nvidia-smi fields."""
+    import types
+    from app.jobs import _parse_gpu_stats
+
+    def _fake_run(*args, **kwargs):
+        return types.SimpleNamespace(
+            returncode=0,
+            stdout="0, NVIDIA RTX, 45, 512, 8192, 17\n",
+        )
+
+    monkeypatch.setattr("subprocess.run", _fake_run)
+
+    stats = _parse_gpu_stats()
+    assert stats is not None
+    assert stats[0].memory_used_mib == 512.0
+    assert stats[0].memory_total_mib == 8192.0
+    assert stats[0].memory_percent == 6.25
+    assert stats[0].utilization_percent == 17.0
+
+
 def test_list_jobs_marks_stopped_when_container_gone(api_client, mock_docker_client):
     """If the container has vanished, GET /v1/jobs marks the job stopped."""
     _submit_detach(api_client)

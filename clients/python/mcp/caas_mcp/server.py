@@ -89,6 +89,20 @@ def make_server(cfg: Config | None = None) -> FastMCP:
             client.close()
         return _to_json(data)
 
+    @server.resource("system://gpu")
+    def gpu_info() -> str:
+        """Return GPU hardware info (memory, temperature, utilization) as JSON.
+
+        Queries the remote node's nvidia-smi via the dispatcher.
+        """
+        client = _build_client(cfg)
+        try:
+            return _to_json(client.gpu_info())
+        except CaasError as exc:
+            return _to_json({"error": str(exc)})
+        finally:
+            client.close()
+
     # ── Tools (PR 1 — skeleton) ─────────────────────────────────────────
 
     @server.tool()
@@ -268,6 +282,244 @@ def make_server(cfg: Config | None = None) -> FastMCP:
             except CaasError as exc:
                 return _to_json({"error": str(exc)})
             return logs
+        finally:
+            client.close()
+
+    # ── Tools: workspace file I/O (via execute_cell wrapper) ─────────────
+
+    @server.tool()
+    async def write_file(
+        path: str,
+        content: str,
+        ctx: Context | None = None,
+    ) -> str:
+        """Write content to a file in the remote workspace (/workspace/<path>).
+
+        Uses execute_cell to write — the Docker volume mount persists files
+        across tool calls. Content is safely escaped via json.dumps to prevent
+        SyntaxError from special characters.
+        """
+        import json as _json
+        import os as _os
+
+        safe_path = _os.path.basename(path)
+        safe_content = _json.dumps(content)
+        bytes_written = len(content.encode("utf-8"))
+
+        code = (
+            "import os\n"
+            f"content = {safe_content}\n"
+            f"with open('/workspace/{safe_path}', 'w') as f:\n"
+            "    f.write(content)\n"
+            f"print('Wrote {bytes_written} bytes to {safe_path}')"
+        )
+
+        return await _execute_cell_inline(code)
+
+    @server.tool()
+    async def read_file(
+        path: str,
+        ctx: Context | None = None,
+    ) -> str:
+        """Read content from a file in the remote workspace (/workspace/<path>).
+
+        Uses execute_cell to read — hard-limit at 8000 chars to protect the
+        agent's context window.
+        """
+        import os as _os
+
+        safe_path = _os.path.basename(path)
+
+        code = (
+            "try:\n"
+            f"    with open('/workspace/{safe_path}', 'r') as f:\n"
+            "        data = f.read(8000)\n"
+            "        print(data)\n"
+            "        if f.read(1):\n"
+            "            print('\\n\\n[System: File truncated to 8000 chars]')\n"
+            "except FileNotFoundError:\n"
+            '    print("Error: File not found in workspace.")'
+        )
+
+        return await _execute_cell_inline(code)
+
+    async def _execute_cell_inline(code: str) -> str:
+        """Helper: run inline Python via execute_cell with workspace mount."""
+        import json
+        from mcp.server.fastmcp import Context as _Ctx
+
+        workspace = server._cfg.remote_workspace  # type: ignore[attr-defined]
+        volumes: list[dict] | None = None
+        if workspace:
+            volumes = [
+                {"host_path": workspace, "container_path": "/workspace", "mode": "rw"}
+            ]
+
+        client = _build_client(cfg)
+        try:
+            try:
+                result = client.execute_cell(
+                    code=code,
+                    image="python:3.11-slim",
+                    volumes=volumes,
+                    suppress_entrypoint=True,
+                )
+                # Result may be raw stdout or JSON-serialized with timeout guidance
+                try:
+                    return _to_json(json.loads(result))
+                except (json.JSONDecodeError, TypeError):
+                    return _to_json({"output": result.strip()})
+            except CaasTimeoutError:
+                return _to_json({
+                    "status": "timeout",
+                    "message": "Execution timed out. The job may still be running.",
+                })
+            except CaasError as exc:
+                return _to_json({"error": str(exc)})
+        finally:
+            client.close()
+
+    # ── Tools: template management ──────────────────────────────────────
+
+    @server.tool()
+    async def list_templates(
+        ctx: Context | None = None,
+    ) -> str:
+        """List all saved job templates."""
+        client = _build_client(cfg)
+        try:
+            return _to_json(client.templates_list())
+        except CaasError as exc:
+            return _to_json({"error": str(exc)})
+        finally:
+            client.close()
+
+    @server.tool()
+    async def upsert_template(
+        name: str,
+        image: str | None = None,
+        cmd: str | None = None,
+        env: str | None = None,
+        volumes: str | None = None,
+        gpu: str | None = None,
+        ctx: Context | None = None,
+    ) -> str:
+        """Create or update a job template.
+
+        Args:
+            name:  Template name.
+            image: Docker image.
+            cmd:   Command to run in the container.
+            env:   Comma-separated KEY=VALUE pairs.
+            volumes: JSON array of volume configs (e.g. ``[{"host_path":"/data","container_path":"/data","mode":"rw"}]``).
+            gpu:   GPU spec string (e.g. ``"0,1"`` or ``"all"``).
+
+        Returns the saved template dict with ``id``, ``created_at``, ``modified_at``.
+        """
+        client = _build_client(cfg)
+        try:
+            parsed_env = _parse_env(env)
+            parsed_gpu = _parse_gpu(gpu) if gpu else None
+            parsed_volumes = None
+            if volumes:
+                import json as _json
+                try:
+                    parsed_volumes = _json.loads(volumes)
+                except (_json.JSONDecodeError, ValueError):
+                    return _to_json({"error": f"Invalid volumes JSON: {volumes!r}"})
+
+            result = client.templates_upsert(
+                name=name,
+                image=image,
+                cmd=cmd,
+                env=parsed_env,
+                volumes=parsed_volumes,
+                gpu=parsed_gpu,
+            )
+            return _to_json(result)
+        except CaasError as exc:
+            return _to_json({"error": str(exc)})
+        finally:
+            client.close()
+
+    # ── Tools: schedule management ──────────────────────────────────────
+
+    @server.tool()
+    async def list_schedules(
+        ctx: Context | None = None,
+    ) -> str:
+        """List all schedules (pending, active, cancelled)."""
+        client = _build_client(cfg)
+        try:
+            return _to_json(client.schedules_list())
+        except CaasError as exc:
+            return _to_json({"error": str(exc)})
+        finally:
+            client.close()
+
+    @server.tool()
+    async def create_schedule(
+        template_id: str | None = None,
+        delay_seconds: int = 60,
+        image: str | None = None,
+        cmd: str | None = None,
+        env: str | None = None,
+        volumes: str | None = None,
+        gpu: str | None = None,
+        ctx: Context | None = None,
+    ) -> str:
+        """Create a schedule to trigger a job.
+
+        Args:
+            template_id:  ID of a saved template to use.
+            delay_seconds: Seconds to wait (0 = immediate).
+            image:        Docker image (if not using template_id).
+            cmd:          Command to run (if not using template_id).
+            env:          Comma-separated KEY=VALUE pairs.
+            volumes:      JSON array of volume configs.
+            gpu:          GPU spec string.
+
+        Either ``template_id`` or inline fields (image, cmd, etc.) must be provided.
+        """
+        client = _build_client(cfg)
+        try:
+            parsed_env = _parse_env(env)
+            parsed_gpu = _parse_gpu(gpu) if gpu else None
+            parsed_volumes = None
+            if volumes:
+                import json as _json
+                try:
+                    parsed_volumes = _json.loads(volumes)
+                except (_json.JSONDecodeError, ValueError):
+                    return _to_json({"error": f"Invalid volumes JSON: {volumes!r}"})
+
+            result = client.schedules_upsert(
+                template_id=template_id,
+                delay_seconds=delay_seconds,
+                image=image,
+                cmd=cmd,
+                env=parsed_env,
+                volumes=parsed_volumes,
+                gpu=parsed_gpu,
+            )
+            return _to_json(result)
+        except CaasError as exc:
+            return _to_json({"error": str(exc)})
+        finally:
+            client.close()
+
+    @server.tool()
+    async def cancel_schedule(
+        schedule_id: str,
+        ctx: Context | None = None,
+    ) -> str:
+        """Cancel a pending schedule by ID."""
+        client = _build_client(cfg)
+        try:
+            result = client.schedule_cancel(schedule_id)
+            return _to_json(result)
+        except CaasError as exc:
+            return _to_json({"error": str(exc)})
         finally:
             client.close()
 

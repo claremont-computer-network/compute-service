@@ -236,12 +236,22 @@ class JobStore:
             self._evict_oldest_stopped()
         return record
 
-    def mark_stopped(self, job_id: str, exit_code: t.Optional[int] = None) -> None:
+    def mark_stopped(self, job_id: str, exit_code: t.Optional[int] = None) -> bool:
+        """Mark a job as stopped.
+
+        Returns True if the job status was actually transitioned from
+        ``"running"`` to ``"stopped"`` by this call.  Returns False if the
+        job was already stopped or does not exist.  Callers that need to
+        fire completion hooks exactly once should gate on this return value.
+        """
         with self._lock:
             if job_id in self._jobs:
+                was_running = self._jobs[job_id].status == "running"
                 self._jobs[job_id].status = "stopped"
                 if exit_code is not None:
                     self._jobs[job_id].exit_code = exit_code
+                return was_running
+        return False
 
     def append_resource_sample(self, job_id: str, sample: ResourceStats) -> None:
         """Append one resource-stats sample collected during a running job.

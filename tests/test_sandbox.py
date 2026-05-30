@@ -42,7 +42,7 @@ def _create_mock_sandbox_container(api_client, mock_docker_client, is_gpu=False)
 
     container.exec_run.return_value = MagicMock(
         exit_code=0,
-        output=b"42\n",
+        output=(b"42\n", None),  # (stdout, stderr) tuple — matches demux=True
     )
 
     return container

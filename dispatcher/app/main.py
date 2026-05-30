@@ -652,15 +652,16 @@ def _enrich_job_data(job, data: dict) -> None:
                     enriched_record = latest
                     registry.on_enrich(enriched_record, data)
                     return
-                job_store.mark_stopped(job.job_id, exit_code=exit_code)
+                transitioned = job_store.mark_stopped(job.job_id, exit_code=exit_code)
                 # Release resource slot if this is a sandbox (unexpected exit).
                 if job.job_type == "sandbox":
                     _release_sandbox_slots(job)
                 data["status"] = "stopped"
                 data["exit_code"] = exit_code
-                refreshed = job_store.get(job.job_id)
-                enriched_record = refreshed or job
-                registry.on_job_complete(enriched_record, exit_code)
+                if transitioned:
+                    refreshed = job_store.get(job.job_id)
+                    enriched_record = refreshed or job
+                    registry.on_job_complete(enriched_record, exit_code)
             elif docker_status == "running":
                 stats = _fetch_resources(container)
                 data["resources"] = stats.model_dump() if stats else None
@@ -674,13 +675,14 @@ def _enrich_job_data(job, data: dict) -> None:
                 enriched_record = latest
                 registry.on_enrich(enriched_record, data)
                 return
-            job_store.mark_stopped(job.job_id)
+            transitioned = job_store.mark_stopped(job.job_id)
             data["status"] = "stopped"
             if job.job_type == "sandbox":
                 _release_sandbox_slots(job)
-            refreshed = job_store.get(job.job_id)
-            enriched_record = refreshed or job
-            registry.on_job_complete(enriched_record, None)
+            if transitioned:
+                refreshed = job_store.get(job.job_id)
+                enriched_record = refreshed or job
+                registry.on_job_complete(enriched_record, None)
         except DockerException:
             pass
     registry.on_enrich(enriched_record, data)
@@ -801,14 +803,28 @@ def create_sandbox(req: SandboxRequest, authorized: bool = Depends(get_api_key))
     except Exception as e:
         # If post-start registration fails, clean up to avoid unmanaged sandboxes.
         if container is not None:
-            with contextlib.suppress(Exception):
+            container_stopped = False
+            try:
                 container.stop(timeout=5)
-            with contextlib.suppress(Exception):
-                container.remove(force=True)
+                container_stopped = True
+            except Exception:
+                logger.error(
+                    "Failed to stop sandbox container %s after registration failure; "
+                    "slot will not be released to prevent over-allocation.",
+                    getattr(container, "id", "?")[:12],
+                )
+            if container_stopped:
+                with contextlib.suppress(Exception):
+                    container.remove(force=True)
+            else:
+                # Container is still running — keep the slot held so it is not
+                # over-allocated while the orphaned sandbox occupies resources.
+                released = True
         if record is not None:
-            stopped = job_store.mark_stopped(record.job_id, error=str(e))
+            job_store.mark_stopped(record.job_id)
+            stopped_record = job_store.get(record.job_id)
             with contextlib.suppress(Exception):
-                registry.on_job_complete(stopped, None)
+                registry.on_job_complete(stopped_record or record, None)
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         if not released:
@@ -844,9 +860,11 @@ def exec_in_sandbox(job_id: str, req: ExecRequest, authorized: bool = Depends(ge
         raise HTTPException(status_code=404, detail=f"Sandbox container not found: {job_id}")
 
     try:
-        result = container.exec_run(req.cmd)
+        result = container.exec_run(req.cmd, demux=True)
         exit_code = result.exit_code
-        stdout = result.output.decode(errors="replace") if result.output else ""
+        stdout_bytes, stderr_bytes = result.output if result.output else (None, None)
+        stdout = stdout_bytes.decode(errors="replace") if stdout_bytes else ""
+        stderr = stderr_bytes.decode(errors="replace") if stderr_bytes else ""
     except ContainerError as e:
         with sandbox_last_access_lock:
             sandbox_last_access[job_id] = datetime.now(timezone.utc)
@@ -864,6 +882,7 @@ def exec_in_sandbox(job_id: str, req: ExecRequest, authorized: bool = Depends(ge
         sandbox_last_access[job_id] = datetime.now(timezone.utc)
     return JSONResponse({
         "stdout": stdout,
+        "stderr": stderr,
         "exit_code": exit_code,
     })
 
@@ -901,8 +920,16 @@ async def _reap_sandbox(idle_seconds: int, check_interval: int = 60) -> None:
                 try:
                     container = client.containers.get(job.container_id)
                     container.stop()
-                    container.remove()
+                    # Container is confirmed stopped; treat remove failure as
+                    # non-fatal (transient Docker error) so slot cleanup proceeds.
                     container_gone = True
+                    try:
+                        container.remove()
+                    except (NotFound, DockerException) as remove_err:
+                        logger.warning(
+                            "Sandbox reaper: could not remove stopped container %s: %s",
+                            sid[:12], remove_err,
+                        )
                 except NotFound:
                     # Container already gone — nothing to stop/remove.
                     container_gone = True

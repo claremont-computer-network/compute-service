@@ -122,6 +122,18 @@ def make_server(cfg: Config | None = None) -> FastMCP:
             client.close()
         return _to_json(jobs)
 
+    @server.tool()
+    def list_images() -> str:
+        """List Docker images pre-downloaded on the dispatcher node."""
+        client = _build_client(cfg)
+        try:
+            images = client.images_list()
+        except CaasError as exc:
+            return _to_json({"error": str(exc)})
+        finally:
+            client.close()
+        return _to_json(images)
+
     # ── Tools (PR 2 — execute + workspace + timeout) ────────────────────
 
     @server.tool()

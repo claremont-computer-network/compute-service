@@ -304,12 +304,14 @@ def make_server(cfg: Config | None = None) -> FastMCP:
 
         safe_path = _os.path.basename(path)
         safe_content = _json.dumps(content)
+        bytes_written = len(content.encode("utf-8"))
 
         code = (
-            "import json, os\\n"
+            "import os\\n"
+            f"content = {safe_content}\\n"
             f"with open('/workspace/{safe_path}', 'w') as f:\\n"
-            f"    f.write(json.loads({safe_content}))\\n"
-            f"print(f'Wrote {{len(content)}} bytes to {safe_path}\\')"
+            "    f.write(content)\\n"
+            f"print('Wrote {bytes_written} bytes to {safe_path}')"
         )
 
         return await _execute_cell_inline(code)
@@ -423,7 +425,7 @@ def make_server(cfg: Config | None = None) -> FastMCP:
                 import json as _json
                 try:
                     parsed_volumes = _json.loads(volumes)
-                except (json.JSONDecodeError, ValueError):
+                except (_json.JSONDecodeError, ValueError):
                     return _to_json({"error": f"Invalid volumes JSON: {volumes!r}"})
 
             result = client.templates_upsert(
@@ -488,7 +490,7 @@ def make_server(cfg: Config | None = None) -> FastMCP:
                 import json as _json
                 try:
                     parsed_volumes = _json.loads(volumes)
-                except (json.JSONDecodeError, ValueError):
+                except (_json.JSONDecodeError, ValueError):
                     return _to_json({"error": f"Invalid volumes JSON: {volumes!r}"})
 
             result = client.schedules_upsert(

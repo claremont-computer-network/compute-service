@@ -82,7 +82,7 @@ def _parse_gpu_stats() -> t.Optional[list[GpuStats]]:
 
     try:
         result = subprocess.run(
-            ["nvidia-smi", "--query-gpu=index,name,temperature.gpu,memory.used,memory.total,memory.usage,utilization.gpu",
+            ["nvidia-smi", "--query-gpu=index,name,temperature.gpu,memory.used,memory.total,utilization.gpu",
              "--format=csv,noheader,nounits"],
             capture_output=True, text=True, timeout=10,
         )
@@ -93,16 +93,19 @@ def _parse_gpu_stats() -> t.Optional[list[GpuStats]]:
             if not line.strip():
                 continue
             parts = [p.strip() for p in line.split(",")]
-            if len(parts) < 7:
+            if len(parts) < 6:
                 continue
+            memory_used_mib = round(float(parts[3]), 2)
+            memory_total_mib = round(float(parts[4]), 2)
+            memory_percent = round((memory_used_mib / memory_total_mib * 100.0), 2) if memory_total_mib > 0 else 0.0
             gpus.append(GpuStats(
                 device_id=int(parts[0]),
                 gpu_name=parts[1],
                 temperature=int(parts[2]),
-                memory_used_mib=round(float(parts[3]), 2),
-                memory_total_mib=round(float(parts[4]), 2),
-                memory_percent=round(float(parts[5]), 2),
-                utilization_percent=round(float(parts[6]), 1),
+                memory_used_mib=memory_used_mib,
+                memory_total_mib=memory_total_mib,
+                memory_percent=memory_percent,
+                utilization_percent=round(float(parts[5]), 1),
             ))
         return gpus or None
     except (FileNotFoundError, subprocess.TimeoutExpired, ValueError, ZeroDivisionError):

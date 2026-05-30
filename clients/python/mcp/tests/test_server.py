@@ -130,7 +130,7 @@ async def test_make_server_returns_server():
 
 @pytest.mark.asyncio
 async def test_make_server_exposes_health_resource():
-    """The server registers a resource at system://health."""
+    """The server registers health and GPU resources."""
     import os
     os.environ["CAAS_DISPATCHER_URL"] = "http://test:9999"
     os.environ.pop("CAAS_API_KEY", None)
@@ -146,11 +146,12 @@ async def test_make_server_exposes_health_resource():
     resources = await server.list_resources()
     uris = [str(r.uri) for r in resources]
     assert "system://health" in uris
+    assert "system://gpu" in uris
 
 
 @pytest.mark.asyncio
 async def test_make_server_tool_count():
-    """The server registers exactly 5 tools for PR 1."""
+    """The server registers all currently supported tools."""
     import os
     os.environ["CAAS_DISPATCHER_URL"] = "http://test:9999"
     os.environ.pop("CAAS_API_KEY", None)
@@ -161,7 +162,20 @@ async def test_make_server_tool_count():
 
     tools = await server.list_tools()
     names = sorted(t.name for t in tools)
-    assert names == ["execute", "execute_cell", "get_logs", "list_jobs", "stop_job"]
+    assert names == [
+        "cancel_schedule",
+        "create_schedule",
+        "execute",
+        "execute_cell",
+        "get_logs",
+        "list_jobs",
+        "list_schedules",
+        "list_templates",
+        "read_file",
+        "stop_job",
+        "upsert_template",
+        "write_file",
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -293,3 +307,39 @@ async def test_execute_cell_injects_workspace_volume():
     assert volumes[0]["host_path"] == "/mnt/data/staging"
     assert volumes[0]["container_path"] == "/workspace"
     assert volumes[0]["mode"] == "rw"
+
+
+@pytest.mark.asyncio
+async def test_upsert_template_invalid_volumes_returns_error_json():
+    """upsert_template returns structured JSON for malformed volumes input."""
+    import os
+    os.environ["CAAS_DISPATCHER_URL"] = BASE_URL
+    os.environ.pop("CAAS_API_KEY", None)
+    os.environ.pop("CAAS_REMOTE_WORKSPACE", None)
+
+    from caas_mcp.server import make_server
+    server = make_server()
+
+    result = await server.call_tool("upsert_template", {"name": "tmpl", "volumes": "{bad"})
+    content_text = result[0][0].text if hasattr(result[0][0], "text") else result[0][0]
+    parsed = _json.loads(content_text)
+    assert "error" in parsed
+    assert "Invalid volumes JSON" in parsed["error"]
+
+
+@pytest.mark.asyncio
+async def test_create_schedule_invalid_volumes_returns_error_json():
+    """create_schedule returns structured JSON for malformed volumes input."""
+    import os
+    os.environ["CAAS_DISPATCHER_URL"] = BASE_URL
+    os.environ.pop("CAAS_API_KEY", None)
+    os.environ.pop("CAAS_REMOTE_WORKSPACE", None)
+
+    from caas_mcp.server import make_server
+    server = make_server()
+
+    result = await server.call_tool("create_schedule", {"template_id": "t1", "volumes": "{bad"})
+    content_text = result[0][0].text if hasattr(result[0][0], "text") else result[0][0]
+    parsed = _json.loads(content_text)
+    assert "error" in parsed
+    assert "Invalid volumes JSON" in parsed["error"]

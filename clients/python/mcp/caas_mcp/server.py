@@ -307,10 +307,10 @@ def make_server(cfg: Config | None = None) -> FastMCP:
         bytes_written = len(content.encode("utf-8"))
 
         code = (
-            "import os\\n"
-            f"content = {safe_content}\\n"
-            f"with open('/workspace/{safe_path}', 'w') as f:\\n"
-            "    f.write(content)\\n"
+            "import os\n"
+            f"content = {safe_content}\n"
+            f"with open('/workspace/{safe_path}', 'w') as f:\n"
+            "    f.write(content)\n"
             f"print('Wrote {bytes_written} bytes to {safe_path}')"
         )
 
@@ -331,13 +331,13 @@ def make_server(cfg: Config | None = None) -> FastMCP:
         safe_path = _os.path.basename(path)
 
         code = (
-            "try:\\n"
-            f"    with open('/workspace/{safe_path}', 'r') as f:\\n"
-            "        data = f.read(8000)\\n"
-            "        print(data)\\n"
-            "        if f.read(1):\\n"
-            "            print('\\\\n\\\\n[System: File truncated to 8000 chars]')\\n"
-            "except FileNotFoundError:\\n"
+            "try:\n"
+            f"    with open('/workspace/{safe_path}', 'r') as f:\n"
+            "        data = f.read(8000)\n"
+            "        print(data)\n"
+            "        if f.read(1):\n"
+            "            print('\\n\\n[System: File truncated to 8000 chars]')\n"
+            "except FileNotFoundError:\n"
             '    print("Error: File not found in workspace.")'
         )
 

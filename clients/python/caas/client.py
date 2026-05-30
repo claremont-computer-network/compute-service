@@ -380,15 +380,23 @@ class CaasClient:
         shm_size: t.Optional[str] = None,
     ) -> dict:
         """Create a persistent sandbox container for interactive execution."""
-        payload = self._compact(
-            image=image, env=env, volumes=volumes, gpu=gpu, shm_size=shm_size,
-        )
+        # Omit empty dict/list values — _compact() only removes None, not empty containers
+        payload: t.Dict[str, t.Any] = {"image": image}
+        if env:
+            payload["env"] = env
+        if volumes:
+            payload["volumes"] = volumes
+        if gpu is not None:
+            payload["gpu"] = gpu
+        if shm_size is not None:
+            payload["shm_size"] = shm_size
+
         resp = self._call("POST", f"{self._base}/v1/sandbox",
                           json=payload, headers=self._headers())
         return self._check(resp).json()
 
     def sandbox_exec(
-        self, sandbox_id: str, cmd: t.Union[str, t.List[str]]
+        self, sandbox_id: str, cmd: str
     ) -> dict:
         """Execute a command interactively inside a running sandbox."""
         payload = self._compact(cmd=cmd)

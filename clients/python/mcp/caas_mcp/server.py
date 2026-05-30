@@ -707,7 +707,7 @@ def make_server(cfg: Config | None = None) -> FastMCP:
                 "status": job.get("status"),
                 "job_type": job.get("job_type"),
                 "image": job.get("image"),
-                "last_accessed": job.get("submitted_at"),
+                "last_accessed": job.get("last_accessed"),
             })
         except CaasError as exc:
             return _to_json({"error": str(exc)})

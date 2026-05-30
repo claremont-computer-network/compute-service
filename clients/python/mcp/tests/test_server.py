@@ -367,11 +367,15 @@ async def test_create_schedule_invalid_volumes_returns_error_json():
 
 @pytest.mark.asyncio
 async def test_create_sandbox_includes_workspace_volume():
-    """create_sandbox injects CAAS_REMOTE_WORKSPACE as a volume mount."""
-    mt = _make_mock_transport({})
-    mt[("POST", f"{BASE_URL}/v1/sandbox")] = _make_response(
-        200, {"sandbox_id": "sbox001", "status": "running"}
-    )
+    """create_sandbox injects CAAS_REMOTE_WORKSPACE as a volume mount in the POST body."""
+    captured_payload = {}
+
+    def _check(request):
+        body = _json.loads(request.content)
+        captured_payload["volumes"] = body.get("volumes", [])
+        return _make_response(200, {"sandbox_id": "sbox001", "status": "running"})
+
+    mt = _make_mock_transport({("POST", f"{BASE_URL}/v1/sandbox"): _check})
 
     import os
     os.environ["CAAS_DISPATCHER_URL"] = BASE_URL
@@ -385,14 +389,15 @@ async def test_create_sandbox_includes_workspace_volume():
 
     server = make_server(cfg)
 
-    tools = await server.list_tools()
-    assert len([t for t in tools if t.name == "create_sandbox"]) == 1
-
     result = await server.call_tool("create_sandbox", {"image": "python:3.11-slim"})
     content_text = result[0][0].text if hasattr(result[0][0], "text") else result[0][0]
     parsed = _json.loads(content_text)
     assert parsed["sandbox_id"] == "sbox001"
     assert parsed["status"] == "running"
+    # Verify workspace volume was actually sent in the request
+    assert captured_payload["volumes"] == [
+        {"host_path": "/mnt/data/staging", "container_path": "/workspace", "mode": "rw"}
+    ]
 
 
 @pytest.mark.asyncio
@@ -472,10 +477,15 @@ async def test_sandbox_stop_tool():
 
 @pytest.mark.asyncio
 async def test_sandbox_status_resource():
-    """sandbox://sandbox_id/status resource returns job metadata."""
+    """sandbox://sandbox_id/status resource returns job metadata from real exec."""
     mt = _make_mock_transport({})
     mt[("GET", f"{BASE_URL}/v1/jobs/sbox001")] = _make_response(
-        200, {"status": "running", "job_type": "sandbox", "image": "python:3.11-slim"}
+        200, {
+            "status": "running",
+            "job_type": "sandbox",
+            "image": "python:3.11-slim",
+            "last_accessed": "2026-01-01T12:00:00+00:00",
+        }
     )
 
     from caas_mcp.config import Config
@@ -491,6 +501,15 @@ async def test_sandbox_status_resource():
     template_uris = [str(t.uriTemplate) for t in templates]
     matching = [u for u in template_uris if "sandbox://{sandbox_id}/status" in u]
     assert len(matching) == 1
+
+    # Actually call read_resource to exercise the implementation
+    resources = await server.read_resource("sandbox://sbox001/status")
+    content_text = resources[0].content
+    parsed = _json.loads(content_text)
+    assert parsed["status"] == "running"
+    assert parsed["job_type"] == "sandbox"
+    assert parsed["image"] == "python:3.11-slim"
+    assert parsed["last_accessed"] == "2026-01-01T12:00:00+00:00"
 
 
 @pytest.mark.asyncio

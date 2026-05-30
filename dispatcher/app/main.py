@@ -202,7 +202,8 @@ async def lifespan(app: FastAPI):
                 record.job_type = "sandbox"
                 record.resource_type = _determine_resource_type(sc)
                 record.container_id = sc.id
-                job_store._jobs[sc.id] = record  # pylint: disable=protected-access
+                with job_store._lock:  # pylint: disable=protected-access
+                    job_store._jobs[sc.id] = record  # pylint: disable=protected-access
                 sandbox_hydrate_container(sc, record)
                 logger.info("Restored sandbox %s (%s slot)", record.job_id[:12], record.resource_type)
             else:
@@ -217,7 +218,8 @@ async def lifespan(app: FastAPI):
                     submitted_at=datetime.now(timezone.utc),
                     resource_type=_determine_resource_type(sc),
                 )
-                job_store._jobs[sc.id] = record  # pylint: disable=protected-access
+                with job_store._lock:  # pylint: disable=protected-access
+                    job_store._jobs[sc.id] = record  # pylint: disable=protected-access
                 sandbox_hydrate_container(sc, record)
                 logger.info("Recovered orphan sandbox %s (%s slot)", sc.id[:12], record.resource_type)
     except Exception as exc:

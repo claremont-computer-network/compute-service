@@ -26,6 +26,7 @@ Plugin extension points
     Called after the container exits and logs are captured.
 """
 import asyncio
+import contextlib
 import os
 import typing as t
 import logging
@@ -196,7 +197,11 @@ async def lifespan(app: FastAPI):
         sandbox_containers = client.containers.list(
             filters={"label": "caas.sandbox=true"}
         )
-        for sc in sandbox_containers:
+    except Exception as exc:
+        logger.warning("Failed to list sandbox containers for recovery: %s", exc)
+        sandbox_containers = []
+    for sc in sandbox_containers:
+        try:
             sc.reload()
             record = job_store.get(sc.id)
             if record is not None:
@@ -223,8 +228,8 @@ async def lifespan(app: FastAPI):
                     job_store._jobs[sc.id] = record  # pylint: disable=protected-access
                 sandbox_hydrate_container(sc, record)
                 logger.info("Recovered orphan sandbox %s (%s slot)", sc.id[:12], record.resource_type)
-    except Exception as exc:
-        logger.warning("Failed to recover sandbox containers: %s", exc)
+        except Exception:
+            logger.exception("Failed to recover sandbox container %s", getattr(sc, "id", "<unknown>"))
 
     # Start the sandbox reaper that cleans up idle sandboxes to prevent GPU
     # slot deadlock (a zombie sandbox holding a GPU indefinitely is the only
@@ -316,7 +321,8 @@ def sandbox_hydrate_container(container, record) -> None:
             f"Slot {resource!r} already held for recovered sandbox "
             f"{record.job_id[:12]} — possible slot corruption"
         )
-    sandbox_last_access[record.job_id] = datetime.now(timezone.utc)
+    with sandbox_last_access_lock:
+        sandbox_last_access[record.job_id] = datetime.now(timezone.utc)
 
 
 def _release_sandbox_slots(job) -> None:
@@ -328,7 +334,8 @@ def _release_sandbox_slots(job) -> None:
     Uses ``job.resource_type`` (recorded at creation) so the call is
     deterministic even if the Docker container has been obliterated.
     """
-    last_access = sandbox_last_access.pop(job.job_id, None)
+    with sandbox_last_access_lock:
+        last_access = sandbox_last_access.pop(job.job_id, None)
     if last_access is None:
         return
     resource_slots.release(job.resource_type)
@@ -372,6 +379,7 @@ def get_api_key(x_api_key: t.Optional[str] = Header(None)):
 # ── Sandbox tracking (persistent interactive containers) ─────────────────────
 
 sandbox_last_access: dict[str, datetime] = {}
+sandbox_last_access_lock = threading.Lock()
 
 
 # ── Extension API router ─────────────────────────────────────────────────────
@@ -758,6 +766,8 @@ def create_sandbox(req: SandboxRequest, authorized: bool = Depends(get_api_key))
     resource = "gpu" if req.gpu is not None else "cpu"
     _acquire_slot(resource)
     released = False
+    container = None
+    record = None
     try:
         run_kwargs = _prepare_run(req)
         run_kwargs["command"] = ["sleep", "infinity"]
@@ -774,8 +784,9 @@ def create_sandbox(req: SandboxRequest, authorized: bool = Depends(get_api_key))
             container, image=req.image, cmd=["sleep", "infinity"],
             job_type="sandbox", resource_type=resource,
         )
-        sandbox_last_access[record.job_id] = datetime.now(timezone.utc)
         registry.on_register(record)
+        with sandbox_last_access_lock:
+            sandbox_last_access[record.job_id] = datetime.now(timezone.utc)
 
         released = True
         return JSONResponse({
@@ -786,6 +797,18 @@ def create_sandbox(req: SandboxRequest, authorized: bool = Depends(get_api_key))
     except HTTPException:
         raise
     except DockerException as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        # If post-start registration fails, clean up to avoid unmanaged sandboxes.
+        if container is not None:
+            with contextlib.suppress(Exception):
+                container.stop(timeout=5)
+            with contextlib.suppress(Exception):
+                container.remove(force=True)
+        if record is not None:
+            stopped = job_store.mark_stopped(record.job_id, error=str(e))
+            with contextlib.suppress(Exception):
+                registry.on_job_complete(stopped, None)
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         if not released:
@@ -812,10 +835,12 @@ def exec_in_sandbox(job_id: str, req: ExecRequest, authorized: bool = Depends(ge
     try:
         container = client.containers.get(job.container_id)
     except NotFound:
-        job_store.mark_stopped(job_id)
-        _release_sandbox_slots(job)
-        stopped_record = job_store.get(job_id)
-        registry.on_job_complete(stopped_record or job, None)
+        current = job_store.get(job_id)
+        if current is not None and current.status == "running":
+            job_store.mark_stopped(job_id)
+            _release_sandbox_slots(current)
+            stopped_record = job_store.get(job_id)
+            registry.on_job_complete(stopped_record or current, None)
         raise HTTPException(status_code=404, detail=f"Sandbox container not found: {job_id}")
 
     try:
@@ -823,6 +848,8 @@ def exec_in_sandbox(job_id: str, req: ExecRequest, authorized: bool = Depends(ge
         exit_code = result.exit_code
         stdout = result.output.decode(errors="replace") if result.output else ""
     except ContainerError as e:
+        with sandbox_last_access_lock:
+            sandbox_last_access[job_id] = datetime.now(timezone.utc)
         stdout = ""
         stderr = e.stderr.decode(errors="replace") if isinstance(e.stderr, bytes) else (e.stderr or "")
         return JSONResponse({
@@ -833,7 +860,8 @@ def exec_in_sandbox(job_id: str, req: ExecRequest, authorized: bool = Depends(ge
     except DockerException as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-    sandbox_last_access[job_id] = datetime.now(timezone.utc)
+    with sandbox_last_access_lock:
+        sandbox_last_access[job_id] = datetime.now(timezone.utc)
     return JSONResponse({
         "stdout": stdout,
         "exit_code": exit_code,
@@ -855,21 +883,23 @@ async def _reap_sandbox(idle_seconds: int, check_interval: int = 60) -> None:
     while True:
         await asyncio.sleep(check_interval)
         now = datetime.now(timezone.utc)
-        to_reap: list[str] = []
-        for sid, last_access in list(sandbox_last_access.items()):
-            if (now - last_access).total_seconds() > idle_seconds:
-                to_reap.append(sid)
+        with sandbox_last_access_lock:
+            to_reap: list[str] = []
+            for sid, last_access in list(sandbox_last_access.items()):
+                if (now - last_access).total_seconds() > idle_seconds:
+                    to_reap.append(sid)
         if not to_reap:
             continue
         for sid in to_reap:
             job = job_store.get(sid)
             if job is None:
-                sandbox_last_access.pop(sid, None)
+                with sandbox_last_access_lock:
+                    sandbox_last_access.pop(sid, None)
                 continue
             container_gone = False
             try:
                 try:
-                    container = client.containers.get(sid)
+                    container = client.containers.get(job.container_id)
                     container.stop()
                     container.remove()
                     container_gone = True

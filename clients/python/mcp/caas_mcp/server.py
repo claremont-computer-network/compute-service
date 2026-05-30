@@ -544,6 +544,8 @@ def make_server(cfg: Config | None = None) -> FastMCP:
     ) -> str:
         """List files in a mounted directory.
 
+        Uses dispatcher extension endpoint ``GET /api/files``.
+
         Returns ``{"path": "/real/path", "entries": [...]}`` where each entry
         is ``{"name", "permissions", "size", "modified", "is_dir"}``.
 
@@ -606,6 +608,8 @@ def make_server(cfg: Config | None = None) -> FastMCP:
     ) -> str:
         """Check if a specific Docker image is available on the node.
 
+        Uses dispatcher extension endpoint ``POST /api/images/check``.
+
         Returns ``{"found": true, "image": {...}}`` or ``{"found": false}``.
 
         Args:
@@ -629,7 +633,7 @@ def make_server(cfg: Config | None = None) -> FastMCP:
         """List all staging areas.
 
         Staging areas are named references to host paths that can be mounted
-        into containers.
+        into containers. Uses ``GET /api/staging``.
         """
         client = _build_client(cfg)
         try:
@@ -650,7 +654,7 @@ def make_server(cfg: Config | None = None) -> FastMCP:
         """Create a staging area — a named reference to a host path mount.
 
         Staging areas can be used as volume sources when creating jobs or
-        sandboxes.
+        sandboxes. Uses ``POST /api/staging``.
 
         Args:
             name: A human-readable name for this staging area.
@@ -674,6 +678,8 @@ def make_server(cfg: Config | None = None) -> FastMCP:
         ctx: Context | None = None,
     ) -> str:
         """Remove a staging area.
+
+        Uses dispatcher extension endpoint ``DELETE /api/staging/{staging_id}``.
 
         Args:
             staging_id: The staging area ID returned by ``staging_list``.

@@ -11,7 +11,9 @@ And related sandbox state management:
 """
 import docker.errors
 import pytest
-from datetime import datetime, timezone
+import asyncio
+import anyio
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
 SANDBOX_URL = "/v1/sandbox"
@@ -412,6 +414,67 @@ def test_enrich_detects_exited_sandbox_with_exit_code(api_client, mock_docker_cl
     assert body["status"] == "stopped"
     assert body["exit_code"] == 137
     assert "cpu" in released
+
+
+def test_enrich_skips_duplicate_completion_when_store_already_stopped(api_client, mock_docker_client):
+    """Stale running copies must not re-fire completion hooks once store is stopped."""
+    import app.main as m
+    _create_mock_sandbox_container(api_client, mock_docker_client)
+
+    _submit_sandbox(api_client)
+    stale_job = m.job_store.list_all()[0]  # stale snapshot (still "running")
+    m.job_store.mark_stopped(stale_job.job_id, exit_code=7)
+
+    called = []
+    original = m.registry.on_job_complete
+    def _track(record, exit_code):
+        called.append((record, exit_code))
+        return original(record, exit_code)
+    m.registry.on_job_complete = _track
+
+    data = stale_job.model_dump(mode="json")
+    m._enrich_job_data(stale_job, data)
+
+    assert data["status"] == "stopped"
+    assert data["exit_code"] == 7
+    assert called == []
+
+
+def test_reaper_keeps_slot_when_docker_stop_fails(api_client, mock_docker_client, monkeypatch):
+    """Reaper should not release slot or mark stopped if stop/remove fails."""
+    import app.main as m
+    _create_mock_sandbox_container(api_client, mock_docker_client)
+
+    _submit_sandbox(api_client)
+    job = m.job_store.list_all()[0]
+    m.sandbox_last_access[job.job_id] = datetime.now(timezone.utc) - timedelta(seconds=999)
+
+    released = []
+    original_release = m.resource_slots.release
+    def _track_release(resource):
+        released.append(resource)
+        return original_release(resource)
+    m.resource_slots.release = _track_release
+
+    container = mock_docker_client.containers.get.return_value
+    container.stop.side_effect = docker.errors.DockerException("daemon unavailable")
+
+    sleep_calls = []
+    async def _sleep_once_then_cancel(_):
+        sleep_calls.append(1)
+        if len(sleep_calls) > 1:
+            raise asyncio.CancelledError
+
+    monkeypatch.setattr(m.asyncio, "sleep", _sleep_once_then_cancel)
+
+    with pytest.raises(asyncio.CancelledError):
+        anyio.run(m._reap_sandbox, 1, 0)
+
+    refreshed = m.job_store.get(job.job_id)
+    assert refreshed is not None
+    assert refreshed.status == "running"
+    assert released == []
+    assert job.job_id in m.sandbox_last_access
 
 
 # ---------------------------------------------------------------------------

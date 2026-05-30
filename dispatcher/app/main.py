@@ -197,6 +197,7 @@ async def lifespan(app: FastAPI):
             filters={"label": "caas.sandbox=true"}
         )
         for sc in sandbox_containers:
+            sc.reload()
             record = job_store.get(sc.id)
             if record is not None:
                 record.job_type = "sandbox"
@@ -623,12 +624,26 @@ def _enrich_job_data(job, data: dict) -> None:
     _TERMINAL_STATES = {"exited", "dead"}
     enriched_record = job  # may be replaced with a refreshed record below
     if job.status == "running" and job.docker_backed:
+        current = job_store.get(job.job_id)
+        if current is not None and current.status != "running":
+            data["status"] = current.status
+            data["exit_code"] = current.exit_code
+            enriched_record = current
+            registry.on_enrich(enriched_record, data)
+            return
         try:
             container = client.containers.get(job.container_id)
             container.reload()
             docker_status = container.status
             if docker_status in _TERMINAL_STATES:
                 exit_code = container.attrs.get("State", {}).get("ExitCode")
+                latest = job_store.get(job.job_id)
+                if latest is not None and latest.status != "running":
+                    data["status"] = latest.status
+                    data["exit_code"] = latest.exit_code
+                    enriched_record = latest
+                    registry.on_enrich(enriched_record, data)
+                    return
                 job_store.mark_stopped(job.job_id, exit_code=exit_code)
                 # Release resource slot if this is a sandbox (unexpected exit).
                 if job.job_type == "sandbox":
@@ -644,6 +659,13 @@ def _enrich_job_data(job, data: dict) -> None:
         except NotFound:
             # Container was obliterated out-of-band (docker rm -f, prune, etc.).
             # Use the stored resource_type for deterministic slot release.
+            latest = job_store.get(job.job_id)
+            if latest is not None and latest.status != "running":
+                data["status"] = latest.status
+                data["exit_code"] = latest.exit_code
+                enriched_record = latest
+                registry.on_enrich(enriched_record, data)
+                return
             job_store.mark_stopped(job.job_id)
             data["status"] = "stopped"
             if job.job_type == "sandbox":
@@ -844,22 +866,22 @@ async def _reap_sandbox(idle_seconds: int, check_interval: int = 60) -> None:
             if job is None:
                 sandbox_last_access.pop(sid, None)
                 continue
-            container_stopped = False
+            container_gone = False
             try:
                 try:
                     container = client.containers.get(sid)
                     container.stop()
                     container.remove()
-                    container_stopped = True
+                    container_gone = True
                 except NotFound:
                     # Container already gone — nothing to stop/remove.
-                    pass
+                    container_gone = True
             except DockerException as e:
                 logger.warning("Sandbox reaper: Docker error stopping sandbox %s: %s", sid[:12], e)
 
-            # Always release slot and mark stopped, even when container operations fail.
-            # The container is no longer running from the system's perspective — we must
-            # still clean up the dispatcher's accounting so the slot becomes available.
+            if not container_gone:
+                continue
+
             _release_sandbox_slots(job)
             job_store.mark_stopped(sid)
             registry.on_job_complete(job_store.get(sid) or job, None)

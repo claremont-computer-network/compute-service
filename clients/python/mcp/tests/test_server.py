@@ -148,6 +148,11 @@ async def test_make_server_exposes_health_resource():
     assert "system://health" in uris
     assert "system://gpu" in uris
 
+    # sandbox resource is registered as a template
+    templates = await server.list_resource_templates()
+    template_uris = [str(t.uriTemplate) for t in templates]
+    assert "sandbox://{sandbox_id}/status" in template_uris
+
 
 @pytest.mark.asyncio
 async def test_make_server_tool_count():
@@ -163,15 +168,26 @@ async def test_make_server_tool_count():
     tools = await server.list_tools()
     names = sorted(t.name for t in tools)
     assert names == [
+        "browse_files",
         "cancel_schedule",
+        "check_image",
+        "create_sandbox",
         "create_schedule",
+        "delete_template",
         "execute",
         "execute_cell",
+        "get_job_by_id",
         "get_logs",
+        "list_images",
         "list_jobs",
         "list_schedules",
         "list_templates",
         "read_file",
+        "sandbox_exec",
+        "sandbox_stop",
+        "staging_create",
+        "staging_delete",
+        "staging_list",
         "stop_job",
         "upsert_template",
         "write_file",
@@ -343,3 +359,252 @@ async def test_create_schedule_invalid_volumes_returns_error_json():
     parsed = _json.loads(content_text)
     assert "error" in parsed
     assert "Invalid volumes JSON" in parsed["error"]
+
+
+# ---------------------------------------------------------------------------
+# Sandbox integration tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_create_sandbox_includes_workspace_volume():
+    """create_sandbox injects CAAS_REMOTE_WORKSPACE as a volume mount in the POST body."""
+    captured_payload = {}
+
+    def _check(request):
+        body = _json.loads(request.content)
+        captured_payload["volumes"] = body.get("volumes", [])
+        return _make_response(200, {"sandbox_id": "sbox001", "status": "running"})
+
+    mt = _make_mock_transport({("POST", f"{BASE_URL}/v1/sandbox"): _check})
+
+    import os
+    os.environ["CAAS_DISPATCHER_URL"] = BASE_URL
+    os.environ["CAAS_REMOTE_WORKSPACE"] = "/mnt/data/staging"
+
+    from caas_mcp.config import Config
+    from caas_mcp.server import make_server
+
+    cfg = Config()
+    cfg._mock_http = httpx.Client(transport=mt)
+
+    server = make_server(cfg)
+
+    result = await server.call_tool("create_sandbox", {"image": "python:3.11-slim"})
+    content_text = result[0][0].text if hasattr(result[0][0], "text") else result[0][0]
+    parsed = _json.loads(content_text)
+    assert parsed["sandbox_id"] == "sbox001"
+    assert parsed["status"] == "running"
+    # Verify workspace volume was actually sent in the request
+    assert captured_payload["volumes"] == [
+        {"host_path": "/mnt/data/staging", "container_path": "/workspace", "mode": "rw"}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_create_sandbox_parses_gpu_string():
+    """create_sandbox parses 'gpu: all' into correct device_ids shape."""
+    mt = _make_mock_transport({})
+
+    captured_payload = {}
+
+    def _check(request):
+        captured_payload["gpu"] = _json.loads(request.content).get("gpu", {})
+        return _make_response(200, {"sandbox_id": "s001", "status": "running"})
+
+    mt[("POST", f"{BASE_URL}/v1/sandbox")] = _check
+
+    import os
+    os.environ["CAAS_DISPATCHER_URL"] = BASE_URL
+    os.environ.pop("CAAS_REMOTE_WORKSPACE", None)
+
+    from caas_mcp.config import Config
+    from caas_mcp.server import make_server
+
+    cfg = Config(dispatcher_url=BASE_URL)
+    cfg._mock_http = httpx.Client(transport=mt)
+
+    server = make_server(cfg)
+
+    await server.call_tool("create_sandbox", {"image": "pytorch:latest", "gpu": "all"})
+
+    assert captured_payload["gpu"] == {"device_ids": "all", "capabilities": ["gpu"]}
+
+
+@pytest.mark.asyncio
+async def test_sandbox_exec_tool():
+    """sandbox_exec forwards sandbox_id and cmd, returns stdout/stderr."""
+    mt = _make_mock_transport({})
+    mt[("POST", f"{BASE_URL}/v1/jobs/sbox001/exec")] = _make_response(
+        200, {"stdout": "all green\n", "stderr": "", "exit_code": 0}
+    )
+
+    from caas_mcp.config import Config
+    from caas_mcp.server import make_server
+
+    cfg = Config(dispatcher_url=BASE_URL)
+    cfg._mock_http = httpx.Client(transport=mt)
+
+    server = make_server(cfg)
+
+    tools = await server.list_tools()
+    assert len([t for t in tools if t.name == "sandbox_exec"]) == 1
+
+    result = await server.call_tool("sandbox_exec", {"sandbox_id": "sbox001", "cmd": "echo ok"})
+    content_text = result[0][0].text if hasattr(result[0][0], "text") else result[0][0]
+    parsed = _json.loads(content_text)
+    assert parsed["stdout"] == "all green\n"
+    assert parsed["exit_code"] == 0
+
+
+@pytest.mark.asyncio
+async def test_sandbox_stop_tool():
+    """sandbox_stop calls DELETE /v1/jobs/{id} and returns stopped status."""
+    mt = _make_mock_transport({})
+    mt[("GET", f"{BASE_URL}/v1/jobs/sbox001")] = _make_response(
+        200, {"job_id": "sbox001", "job_type": "sandbox", "status": "running"}
+    )
+    mt[("DELETE", f"{BASE_URL}/v1/jobs/sbox001")] = _make_response(
+        200, {"job_id": "sbox001", "status": "stopped"}
+    )
+
+    from caas_mcp.config import Config
+    from caas_mcp.server import make_server
+
+    cfg = Config(dispatcher_url=BASE_URL)
+    cfg._mock_http = httpx.Client(transport=mt)
+
+    server = make_server(cfg)
+
+    result = await server.call_tool("sandbox_stop", {"sandbox_id": "sbox001"})
+    content_text = result[0][0].text if hasattr(result[0][0], "text") else result[0][0]
+    parsed = _json.loads(content_text)
+    assert parsed["job_id"] == "sbox001"
+    assert parsed["status"] == "stopped"
+
+
+@pytest.mark.asyncio
+async def test_sandbox_status_resource():
+    """sandbox://sandbox_id/status resource returns job metadata from real exec."""
+    mt = _make_mock_transport({})
+    mt[("GET", f"{BASE_URL}/v1/jobs/sbox001")] = _make_response(
+        200, {
+            "status": "running",
+            "job_type": "sandbox",
+            "image": "python:3.11-slim",
+            "submitted_at": "2026-01-01T12:00:00+00:00",
+        }
+    )
+
+    from caas_mcp.config import Config
+    from caas_mcp.server import make_server
+
+    cfg = Config(dispatcher_url=BASE_URL)
+    cfg._mock_http = httpx.Client(transport=mt)
+
+    server = make_server(cfg)
+
+    # sandbox resource is registered as a template, not a concrete resource
+    templates = await server.list_resource_templates()
+    template_uris = [str(t.uriTemplate) for t in templates]
+    matching = [u for u in template_uris if "sandbox://{sandbox_id}/status" in u]
+    assert len(matching) == 1
+
+    # Actually call read_resource to exercise the implementation
+    resources = await server.read_resource("sandbox://sbox001/status")
+    content_text = resources[0].content
+    parsed = _json.loads(content_text)
+    assert parsed["status"] == "running"
+    assert parsed["job_type"] == "sandbox"
+    assert parsed["image"] == "python:3.11-slim"
+    assert parsed["submitted_at"] == "2026-01-01T12:00:00+00:00"
+
+
+@pytest.mark.asyncio
+async def test_sandbox_status_resource_rejects_non_sandbox_job():
+    mt = _make_mock_transport({})
+    mt[("GET", f"{BASE_URL}/v1/jobs/job001")] = _make_response(
+        200, {"status": "running", "job_type": "normal", "image": "python:3.11-slim"}
+    )
+
+    from caas_mcp.config import Config
+    from caas_mcp.server import make_server
+
+    cfg = Config(dispatcher_url=BASE_URL)
+    cfg._mock_http = httpx.Client(transport=mt)
+
+    server = make_server(cfg)
+    resources = await server.read_resource("sandbox://job001/status")
+    parsed = _json.loads(resources[0].content)
+    assert "not a sandbox" in parsed["error"]
+
+
+@pytest.mark.asyncio
+async def test_sandbox_exec_truncates_large_output():
+    """sandbox_exec truncates stdout/stderr to 8000 chars to protect context window."""
+    mt = _make_mock_transport({})
+    large_output = "x" * 10000
+    mt[("POST", f"{BASE_URL}/v1/jobs/sbox001/exec")] = _make_response(
+        200, {"stdout": large_output, "stderr": large_output, "exit_code": 0}
+    )
+
+    from caas_mcp.config import Config
+    from caas_mcp.server import make_server
+
+    cfg = Config(dispatcher_url=BASE_URL)
+    cfg._mock_http = httpx.Client(transport=mt)
+
+    server = make_server(cfg)
+
+    result = await server.call_tool("sandbox_exec", {"sandbox_id": "sbox001", "cmd": "run"})
+    content_text = result[0][0].text if hasattr(result[0][0], "text") else result[0][0]
+    parsed = _json.loads(content_text)
+
+    assert len(parsed["stdout"]) <= 8000 + 46  # 8000 + "[System Note: stdout truncated.]"
+    assert len(parsed["stderr"]) <= 8000 + 46  # 8000 + "[System Note: stderr truncated.]"
+    assert "truncated" in parsed["stdout"]
+    assert "truncated" in parsed["stderr"]
+
+
+@pytest.mark.asyncio
+async def test_sandbox_exec_timeout_returns_timeout_payload(monkeypatch: pytest.MonkeyPatch):
+    from caas.client import CaasTimeoutError
+    from caas_mcp.config import Config
+    from caas_mcp.server import make_server
+
+    cfg = Config(dispatcher_url=BASE_URL)
+    server = make_server(cfg)
+
+    class _Client:
+        def sandbox_exec(self, _sandbox_id: str, _cmd: str):
+            raise CaasTimeoutError("timed out")
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr("caas_mcp.server._build_client", lambda _cfg: _Client())
+
+    result = await server.call_tool("sandbox_exec", {"sandbox_id": "sbox001", "cmd": "run"})
+    content_text = result[0][0].text if hasattr(result[0][0], "text") else result[0][0]
+    parsed = _json.loads(content_text)
+    assert parsed["status"] == "timeout"
+    assert "timed out" in parsed["message"]
+
+
+@pytest.mark.asyncio
+async def test_sandbox_stop_rejects_non_sandbox_job():
+    mt = _make_mock_transport({})
+    mt[("GET", f"{BASE_URL}/v1/jobs/job001")] = _make_response(
+        200, {"job_id": "job001", "job_type": "normal", "status": "running"}
+    )
+
+    from caas_mcp.config import Config
+    from caas_mcp.server import make_server
+
+    cfg = Config(dispatcher_url=BASE_URL)
+    cfg._mock_http = httpx.Client(transport=mt)
+    server = make_server(cfg)
+
+    result = await server.call_tool("sandbox_stop", {"sandbox_id": "job001"})
+    content_text = result[0][0].text if hasattr(result[0][0], "text") else result[0][0]
+    parsed = _json.loads(content_text)
+    assert "not a sandbox" in parsed["error"]

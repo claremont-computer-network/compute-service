@@ -693,6 +693,132 @@ def make_server(cfg: Config | None = None) -> FastMCP:
         finally:
             client.close()
 
+    # ── Sandbox MCP integration ──────────────────────────────────────────
+
+    @server.resource("sandbox://{sandbox_id}/status")
+    def sandbox_status(sandbox_id: str) -> str:
+        """Return the current status of a specific sandbox."""
+        client = _build_client(cfg)
+        try:
+            job = client.job(sandbox_id)
+            if not job:
+                return _to_json({"error": "Sandbox not found"})
+            if job.get("job_type") != "sandbox":
+                return _to_json({"error": f"Job {sandbox_id} is not a sandbox"})
+            return _to_json({
+                "status": job.get("status"),
+                "job_type": job.get("job_type"),
+                "image": job.get("image"),
+                "submitted_at": job.get("submitted_at"),
+            })
+        except CaasError as exc:
+            return _to_json({"error": str(exc)})
+        finally:
+            client.close()
+
+    @server.tool()
+    async def create_sandbox(
+        image: str,
+        env: str | None = None,
+        gpu: str | None = None,
+        shm_size: str | None = None,
+        ctx: Context | None = None,
+    ) -> str:
+        """Create a persistent sandbox container for interactive execution.
+
+        The sandbox starts with ``sleep infinity`` and holds a resource slot
+        until it is stopped (via ``sandbox_stop``) or reaped by the idle
+        reaper (default TTL: 30 min).
+
+        Args:
+            image:   Docker image to use.
+            env:     Comma-separated ``KEY=VALUE`` pairs.
+            gpu:     GPU request, e.g. ``"0,1"`` or ``"all"``.
+            shm_size: Shared memory size (e.g. ``"2g"``).
+        """
+        parsed_env = _parse_env(env)
+        parsed_gpu = _parse_gpu(gpu) if gpu else None
+        workspace = server._cfg.remote_workspace  # type: ignore[attr-defined]
+
+        volumes: list[dict] | None = None
+        if workspace:
+            volumes = [
+                {"host_path": workspace, "container_path": "/workspace", "mode": "rw"}
+            ]
+
+        client = _build_client(cfg)
+        try:
+            res = client.sandbox_create(
+                image=image,
+                env=parsed_env or None,
+                volumes=volumes,
+                gpu=parsed_gpu,
+                shm_size=shm_size,
+            )
+            return _to_json(res)
+        except CaasError as exc:
+            return _to_json({"error": str(exc)})
+        finally:
+            client.close()
+
+    @server.tool()
+    async def sandbox_exec(
+        sandbox_id: str,
+        cmd: str,
+        ctx: Context | None = None,
+    ) -> str:
+        """Run a command inside an existing sandbox.
+
+        Args:
+            sandbox_id: ID of the running sandbox.
+            cmd:        Command string to execute (e.g. ``'pip install pandas'``).
+        """
+        client = _build_client(cfg)
+        try:
+            res = client.sandbox_exec(sandbox_id, cmd)
+
+            # Enforce truncation limit to protect context window
+            MAX_CHARS = 8000
+            for key in ["stdout", "stderr"]:
+                if key in res and isinstance(res[key], str) and len(res[key]) > MAX_CHARS:
+                    res[key] = res[key][-MAX_CHARS:] + f"\n\n[System Note: {key} truncated.]"
+
+            return _to_json(res)
+        except CaasTimeoutError as exc:
+            return _to_json({
+                "status": "timeout",
+                "message": str(exc),
+                "guidance": (
+                    "The dispatcher timed out waiting for a response. "
+                    "The command may still be running in the sandbox.  Use "
+                    "sandbox://{sandbox_id}/status or the get_logs tool to verify state."
+                ),
+            })
+        except CaasError as exc:
+            return _to_json({"error": str(exc)})
+        finally:
+            client.close()
+
+    @server.tool()
+    async def sandbox_stop(
+        sandbox_id: str,
+        ctx: Context | None = None,
+    ) -> str:
+        """Stop and remove a sandbox."""
+        client = _build_client(cfg)
+        try:
+            job = client.job(sandbox_id)
+            if not job:
+                return _to_json({"error": "Sandbox not found"})
+            if job.get("job_type") != "sandbox":
+                return _to_json({"error": f"Job {sandbox_id} is not a sandbox"})
+            result = client.stop(sandbox_id)
+            return _to_json(result)
+        except CaasError as exc:
+            return _to_json({"error": str(exc)})
+        finally:
+            client.close()
+
     return server
 
 

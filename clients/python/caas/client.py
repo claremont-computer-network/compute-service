@@ -368,3 +368,39 @@ class CaasClient:
         resp = self._call("POST", f"{self._base}/api/images/check",
                           json={"image": image}, headers=self._headers())
         return self._check(resp).json()
+
+    # ── sandbox ─────────────────────────────────────────────────────────────────
+
+    def sandbox_create(
+        self,
+        image: str,
+        env: t.Optional[t.Dict[str, str]] = None,
+        volumes: t.Optional[t.List[t.Dict[str, str]]] = None,
+        gpu: t.Optional[t.Dict[str, t.Any]] = None,
+        shm_size: t.Optional[str] = None,
+    ) -> dict:
+        """Create a persistent sandbox container for interactive execution."""
+        # Omit empty dict/list values — _compact() only removes None, not empty containers
+        payload: t.Dict[str, t.Any] = {"image": image}
+        if env:
+            payload["env"] = env
+        if volumes:
+            payload["volumes"] = volumes
+        if gpu:
+            payload["gpu"] = gpu
+        if shm_size is not None:
+            payload["shm_size"] = shm_size
+
+        resp = self._call("POST", f"{self._base}/v1/sandbox",
+                          json=payload, headers=self._headers())
+        return self._check(resp).json()
+
+    def sandbox_exec(
+        self, sandbox_id: str, cmd: str
+    ) -> dict:
+        """Execute a command interactively inside a running sandbox."""
+        payload = self._compact(cmd=cmd)
+        resp = self._call("POST",
+                          f"{self._base}/v1/jobs/{sandbox_id}/exec",
+                          json=payload, headers=self._headers())
+        return self._check(resp).json()

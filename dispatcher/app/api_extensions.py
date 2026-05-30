@@ -37,6 +37,8 @@ from fastapi.responses import JSONResponse
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.image_registry import list_images, check_image
+
 # ── Router ────────────────────────────────────────────────────────────────────
 
 router = APIRouter()
@@ -616,3 +618,27 @@ def deployment_status(
         "success": succeeded,
         "message": "Job completed successfully" if succeeded else f"Job exited with code {ec}",
     })
+
+
+# ── Image list endpoints ─────────────────────────────────────────────────
+
+class ImageCheckRequest(BaseModel):
+    image: str
+
+
+@router.get("/api/images")
+def get_images():
+    """List all Docker images cached on the dispatcher node."""
+    return JSONResponse(list_images())
+
+
+@router.post("/api/images/check")
+def check_image_endpoint(req: ImageCheckRequest):
+    """Check if a specific image is available on the dispatcher.
+
+    Returns ``{"found": true, "image": {...}}`` or ``{"found": false}``.
+    """
+    info = check_image(req.image)
+    if info is not None:
+        return JSONResponse({"found": True, "image": info})
+    return JSONResponse({"found": False})

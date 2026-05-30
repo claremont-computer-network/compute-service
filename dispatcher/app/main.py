@@ -43,6 +43,7 @@ from app.jobs import JobStore, _fetch_resources
 from app.core.plugin import registry
 from app.core.data_store import DataStore, DEFAULT_DATA_DIR
 from app.plugins import register_default_plugins
+from app.image_registry import populate as populate_image_registry
 
 load_dotenv()  # optional .env
 
@@ -164,6 +165,7 @@ async def lifespan(app: FastAPI):
         )
     logger.info("Loaded plugins: %s", registry.names())
     job_store.hydrate_from_docker(client)
+    populate_image_registry(client)
 
     # Start the schedule scanner that periodically wakes pending schedules.
     import app.api_extensions as _ext

@@ -352,3 +352,19 @@ class CaasClient:
         """Remove a staging area."""
         resp = self._call("DELETE", f"{self._base}/api/staging/{staging_id}", headers=self._headers())
         return self._check(resp).json()
+
+    # ── images ──────────────────────────────────────────────────────────────────
+
+    def images_list(self) -> list:
+        """Return all Docker images cached on the dispatcher node."""
+        resp = self._call("GET", f"{self._base}/api/images", headers=self._headers())
+        return self._check(resp).json()
+
+    def images_check(self, image: str) -> dict:
+        """Check if a specific image is available on the dispatcher.
+
+        Returns ``{"found": true, "image": {...}}`` or ``{"found": false}``.
+        """
+        resp = self._call("POST", f"{self._base}/api/images/check",
+                          json={"image": image}, headers=self._headers())
+        return self._check(resp).json()
